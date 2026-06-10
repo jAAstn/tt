@@ -1,0 +1,1453 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+      <title data-i18n="titleOptions">ZeroRAM Suspender – Options</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      color: #333;
+    }
+
+    .container {
+      display: flex;
+      min-height: 100vh;
+      max-width: 1200px;
+      margin: 0 auto;
+      background: #f9f9f9;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.1);
+    }
+
+    /* Sidebar Navigation */
+    .sidebar {
+      width: 280px;
+      background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 0;
+      box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+    }
+
+    .sidebar-header {
+      padding: 24px 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .sidebar-header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .sidebar-header .icon {
+      width: 32px;
+      height: 32px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      overflow: hidden;
+    }
+
+    .nav-menu {
+      list-style: none;
+      padding: 16px 0;
+    }
+
+    .nav-item {
+      margin: 4px 16px;
+    }
+
+    .nav-link {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      color: rgba(255, 255, 255, 0.8);
+      text-decoration: none;
+      border-radius: 8px;
+      transition: all 0.2s ease;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .nav-link:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: white;
+    }
+
+    .nav-link.active {
+      background: rgba(255, 255, 255, 0.15);
+      color: white;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .nav-icon {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    /* Main Content */
+    .main-content {
+      flex: 1;
+      padding: 32px;
+      overflow-y: auto;
+      text-align: left;
+    }
+
+    .content-section {
+      display: none;
+    }
+
+    .content-section.active {
+      display: block;
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .section-header {
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    .section-header h2 {
+      font-size: 24px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 8px;
+    }
+
+    .section-header p {
+      color: #666;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* Cards */
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      border: 1px solid #f0f0f0;
+      transition: all 0.2s ease;
+      text-align: left;
+    }
+
+    .card:hover {
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    }
+
+    .card-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-align: left;
+    }
+
+    .card-description {
+      color: #666;
+      font-size: 13px;
+      margin-bottom: 16px;
+      line-height: 1.4;
+      text-align: left;
+    }
+
+    .item-title {
+      color: #333;
+      font-weight: 600;
+    }
+
+    /* Form Elements */
+    .form-group {
+      margin-bottom: 20px;
+      text-align: left;
+    }
+
+    .form-group:last-child {
+      margin-bottom: 0;
+    }
+
+    label {
+      display: block;
+      font-weight: 500;
+      color: #333;
+      margin-bottom: 8px;
+      font-size: 14px;
+      text-align: left;
+    }
+
+    input[type="number"] {
+      width: 120px;
+      padding: 10px 12px;
+      border: 2px solid #e1e5e9;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: all 0.2s ease;
+    }
+
+    input[type="number"]:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 120px;
+      padding: 12px;
+      border: 2px solid #e1e5e9;
+      border-radius: 8px;
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+      font-size: 13px;
+      line-height: 1.4;
+      resize: vertical;
+      transition: all 0.2s ease;
+    }
+
+    textarea:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+
+    .help-text {
+      color: #666;
+      font-size: 12px;
+      margin-top: 6px;
+      line-height: 1.4;
+      text-align: left;
+    }
+
+    /* Suspended Tabs Viewer */
+    .suspended-tabs-list {
+      max-height: 400px;
+      overflow-y: auto;
+      border: 1px solid #e1e5e9;
+      border-radius: 8px;
+      padding: 12px;
+      background: #f9f9f9;
+      contain: content;
+    }
+
+    .suspended-window-section + .suspended-window-section {
+      margin-top: 20px;
+    }
+
+    .suspended-window-header {
+      font-weight: 600;
+      color: #667eea;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #e1e5e9;
+    }
+
+    .suspended-tab-item {
+      display: flex;
+      align-items: center;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      background: #fff;
+      border-radius: 6px;
+      border: 1px solid #e1e5e9;
+      transition: background-color 0.2s ease, border-color 0.2s ease;
+    }
+
+    .suspended-tab-item:hover {
+      background-color: #f8f9fa;
+      border-color: #667eea;
+    }
+
+    .suspended-tab-index {
+      margin-right: 12px;
+      color: #667eea;
+      font-weight: 500;
+      min-width: 20px;
+      flex-shrink: 0;
+    }
+
+    .suspended-tab-main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .suspended-tab-title-line {
+      font-weight: 500;
+      color: #333;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .suspended-tab-favicon-img {
+      width: 16px;
+      height: 16px;
+      margin-right: 8px;
+      flex-shrink: 0;
+    }
+
+    .suspended-tab-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .suspended-tab-badges {
+      flex-shrink: 0;
+      margin-left: 8px;
+      display: inline-flex;
+      gap: 4px;
+    }
+
+    .suspended-tab-badge {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+    }
+
+    .suspended-tab-badge-suspended {
+      background: #6c757d;
+      color: #fff;
+    }
+
+    .suspended-tab-badge-discarded {
+      background: #ffc107;
+      color: #333;
+    }
+
+    .suspended-tab-badge-not-suspended {
+      background: #17a2b8;
+      color: #fff;
+    }
+
+    .suspended-tab-url {
+      font-size: 12px;
+      color: #666;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .suspended-tab-meta {
+      font-size: 10px;
+      color: #999;
+      margin-top: 2px;
+    }
+
+    .suspended-tab-actions {
+      margin-left: 12px;
+      flex-shrink: 0;
+    }
+
+    .unsuspend-tab-btn {
+      background: #28a745;
+      color: #fff;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background-color 0.2s ease, opacity 0.2s ease;
+    }
+
+    .unsuspend-tab-btn:hover:not(:disabled) {
+      background-color: #218838;
+    }
+
+    .unsuspend-tab-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .suspended-tabs-empty-state {
+      text-align: center;
+      padding: 20px;
+      color: #666;
+    }
+
+    .suspended-tabs-empty-icon {
+      font-size: 18px;
+    }
+
+    .suspended-tabs-empty-desc {
+      margin-top: 8px;
+    }
+
+    .viewer-filter-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .viewer-filter-label {
+      margin: 0;
+      font-size: 13px;
+      color: #333;
+      font-weight: 500;
+    }
+
+    .viewer-filter-select {
+      min-width: 260px;
+      max-width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #d7dce0;
+      border-radius: 6px;
+      background: #fff;
+      color: #333;
+      font-size: 13px;
+    }
+
+    .viewer-filter-select:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.12);
+    }
+
+    /* Action Bar */
+    .action-bar {
+      position: sticky;
+      bottom: 0;
+      background: white;
+      padding: 20px 32px;
+      border-top: 1px solid #e1e5e9;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 32px -32px -32px;
+    }
+
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(45deg, #667eea, #764ba2);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    }
+
+    .status-message {
+      color: #27ae60;
+      font-size: 14px;
+      font-weight: 500;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .status-message.show {
+      opacity: 1;
+    }
+
+    /* Responsive Design */
+    @media (max-width: 768px) {
+      .container {
+        flex-direction: column;
+      }
+
+      .sidebar {
+        width: 100%;
+        position: relative;
+      }
+
+      .nav-menu {
+        display: flex;
+        overflow-x: auto;
+        padding: 16px;
+      }
+
+      .nav-item {
+        margin: 0 8px;
+        white-space: nowrap;
+      }
+
+      .main-content {
+        padding: 20px;
+      }
+
+      .action-bar {
+        margin: 20px -20px -20px;
+        padding: 16px 20px;
+      }
+    }
+
+    /* Empty State */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #666;
+    }
+
+    .empty-state .icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+
+    /* Overlay Notices */
+    .notice-container {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      z-index: 9999;
+    }
+
+    .notice {
+      min-width: 240px;
+      max-width: 320px;
+      padding: 14px 16px;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 14px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      position: relative;
+      overflow: hidden;
+      transform: translateX(100%);
+      opacity: 0;
+      animation: slideIn 0.25s ease forwards;
+    }
+
+    .notice.hide {
+      animation: fadeOut 0.25s ease forwards;
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(100%); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    @keyframes fadeOut {
+      from { opacity: 1; transform: translateX(0); }
+      to   { opacity: 0; transform: translateX(100%); }
+    }
+
+    .notice-success { background: linear-gradient(45deg, #28a745, #218838); }
+    .notice-error   { background: linear-gradient(45deg, #dc3545, #c82333); }
+    .notice-warning { background: linear-gradient(45deg, #ffc107, #e0a800); color: #333; }
+    .notice-info    { background: linear-gradient(45deg, #17a2b8, #138496); }
+
+    .notice-progress {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      height: 3px;
+      width: 100%;
+      background: rgba(255, 255, 255, 0.85);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar">
+      <div class="sidebar-header">
+        <h1>
+          <div class="icon">
+            <img src="icons/icon32.png" alt="ZeroRAM">
+          </div>
+          <span data-i18n="extName">ZeroRAM Suspender</span>
+        </h1>
+      </div>
+      <ul class="nav-menu">
+        <li class="nav-item">
+          <a href="#" class="nav-link active" data-section="basic">
+            <div class="nav-icon">🔧</div>
+            <span data-i18n="basicSettings">Basic Settings</span>
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="#" class="nav-link" data-section="advanced">
+            <div class="nav-icon">⚡</div>
+            <span data-i18n="advancedSettings">Advanced Settings</span>
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="#" class="nav-link" data-section="whitelist">
+            <div class="nav-icon">📝</div>
+            <span data-i18n="whitelistTitle">Whitelist</span>
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="#" class="nav-link" data-section="shortcuts">
+            <div class="nav-icon">⌨️</div>
+            <span data-i18n="keyboardShortcuts">Keyboard Shortcuts</span>
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="#" class="nav-link" data-section="settings">
+            <div class="nav-icon">⚙️</div>
+            <span data-i18n="settingsManagement">Settings Management</span>
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="#" class="nav-link" data-section="session">
+            <div class="nav-icon">💾</div>
+            <span data-i18n="sessionManagement">Session Management</span>
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="#" class="nav-link" data-section="tabviewer">
+            <div class="nav-icon">📋</div>
+            <span data-i18n="tabViewer">Tab Viewer</span>
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="#" class="nav-link" data-section="migration">
+            <div class="nav-icon">🔄</div>
+            <span data-i18n="tabMigration">Tab Migration</span>
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="#" class="nav-link" data-section="about">
+            <div class="nav-icon">ℹ️</div>
+            <span data-i18n="aboutSettings">About</span>
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="#" class="nav-link" data-section="changelog">
+            <div class="nav-icon">📋</div>
+            <span data-i18n="changeLogSettings">Change Log</span>
+          </a>
+        </li>
+      </ul>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Basic Settings Section -->
+      <section id="basic" class="content-section active">
+        <div class="section-header">
+          <h2 data-i18n="basicSettings">Basic Settings</h2>
+          <p data-i18n="basicSettingsDesc">Configure basic tab suspension behavior and options</p>
+        </div>
+
+        <div class="card">
+	<div class="card">
+          <div class="card-title">
+            <span>⏰</span>
+            <span data-i18n="autoSuspendTitle">Auto Suspend</span>
+          </div>
+          <div class="card-description" data-i18n="autoSuspendDesc">
+            Set how long tabs should be idle before automatically suspending to save memory
+          </div>
+          <div class="form-group">
+            <label for="autoSuspend" data-i18n="autoSuspendLabel">Auto suspend after (minutes):</label>
+            <input type="number" id="autoSuspend" min="0" step="1" />
+            <div class="help-text" data-i18n="autoSuspendHelp">Set 0 to never auto suspend.</div>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-group">
+              <input type="checkbox" id="neverSuspendAudio" checked />
+              <span data-i18n="neverSuspendAudio">Never suspend tabs that are playing audio</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-group">
+              <input type="checkbox" id="neverSuspendPinned" checked />
+              <span data-i18n="neverSuspendPinned">Never suspend pinned tabs</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-group">
+              <input type="checkbox" id="neverSuspendActive" />
+              <span data-i18n="neverSuspendActive">Never suspend active tab in each window</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-group">
+              <input type="checkbox" id="rememberLastActiveTab" checked />
+              <span data-i18n="rememberLastActiveTab">Remember last active tab when switching to other apps</span>
+            </label>
+            <div class="help-text" data-i18n="rememberLastActiveTabHelp">
+              When switching from browser to other applications, protect the last active tab from being suspended
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-group">
+              <input type="checkbox" id="clickAnywhereToUnsuspend" />
+              <span data-i18n="clickAnywhereToUnsuspend">Click anywhere on the suspended page to unsuspend</span>
+            </label>
+            <div class="help-text" data-i18n="clickAnywhereToUnsuspendHelp">
+              When enabled, clicking the original title or URL will also reload the suspended tab.
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>💾</span>
+            <span data-i18n="memoryOptimization">Memory Optimization</span>
+          </div>
+          <div class="card-description" data-i18n="memoryOptimizationDesc">
+            Choose how to handle suspended tabs for optimal memory usage
+          </div>
+          <div class="form-group">
+            <label class="checkbox-group">
+              <input type="checkbox" id="nativeDiscard" />
+              <span data-i18n="nativeDiscardLabel">Use native discard (lowest memory)</span>
+            </label>
+            <div class="help-text" data-i18n="nativeDiscardHelp">
+              Use browser's built-in tab discarding feature for maximum memory savings, but tab state may not be fully preserved.
+            </div>
+          </div>
+        </div>
+
+
+      </section>
+
+      <!-- Whitelist Section -->
+      <section id="whitelist" class="content-section">
+        <div class="section-header">
+          <h2 data-i18n="whitelistTitle">Whitelist</h2>
+          <p data-i18n="whitelistDesc">Manage websites and domains that will never be suspended</p>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>🚫</span>
+            <span data-i18n="whitelistRules">Whitelist Rules</span>
+          </div>
+          <div class="card-description" data-i18n="whitelistHelp">
+            Tabs whose URL or domain matches anything in the list will never be suspended.
+          </div>
+          <div class="form-group">
+            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+              <label for="whitelistList" data-i18n="whitelistLabel">URL or domain list:</label>
+              <button id="refreshWhitelistBtn" class="btn" style="background: #e1e5e9; color: #333;">
+                <span>🔄</span>
+                <span data-i18n="refresh">Refresh</span>
+              </button>
+            </div>
+            <textarea id="whitelistList" data-i18n-placeholder="whitelistPlaceholder" placeholder="One entry per line"></textarea>
+            <div class="help-text" data-i18n="whitelistHelpDetailed" style="white-space: pre-line;">
+              Enter one URL or domain per line. Examples:
+              • google.com - entire domain
+              • https://example.com/page - specific URL
+              • localhost - local development
+            </div>
+          </div>
+		  		  <div class="form-group">
+  <label for="domainSuspendTimes">Domain-spezifische Suspend-Zeiten (JSON)</label>
+  <textarea id="domainSuspendTimes" rows="6" class="form-control" placeholder='{"youtube.com": 5, "github.com": 120}'></textarea>
+  <div id="domainJsonError" class="error-message" style="display: none; color: #dc3545; margin-top: 8px;">
+    Invalid JSON format. Please check your syntax.
+  </div>
+  <small class="form-text text-muted">Example: {"youtube.com": 5, "github.com": 0}</small>
+</div>
+        </div>
+      </section>
+
+      <!-- Settings Management Section -->
+      <section id="settings" class="content-section">
+        <div class="section-header">
+          <h2 data-i18n="settingsManagement">Settings Management</h2>
+          <p data-i18n="settingsManagementDesc">Backup and restore extension settings</p>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>📤</span>
+            <span data-i18n="exportSettings">Export Settings</span>
+          </div>
+          <div class="card-description" data-i18n="exportSettingsDesc">
+            Export all current extension settings to a JSON file for backup
+          </div>
+          <div class="form-group">
+            <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+              <button id="previewSettingsBtn" class="btn" style="background: #17a2b8; color: white;">
+                <span>👁️</span>
+                <span data-i18n="preview">Preview</span>
+              </button>
+              <button id="exportSettingsBtn" class="btn btn-primary">
+                <span>📤</span>
+                <span data-i18n="export">Export</span>
+              </button>
+            </div>
+            
+            <div id="settingsPreview" style="display: none; margin-bottom: 16px;">
+              <div style="margin-bottom: 8px; font-weight: 500;" data-i18n="settingsPreviewTitle">Settings Preview:</div>
+              <div id="settingsPreviewContent" style="max-height: 300px; overflow-y: auto; border: 1px solid #e1e5e9; border-radius: 8px; padding: 12px; background: #f9f9f9; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 12px; line-height: 1.4; white-space: pre-wrap;">
+              </div>
+            </div>
+            
+            <div class="help-text" data-i18n="exportSettingsHelp">
+              Exports all settings including auto-suspend configuration, whitelist, and other preferences
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>📥</span>
+            <span data-i18n="importSettings">Import Settings</span>
+          </div>
+          <div class="card-description" data-i18n="importSettingsDesc">
+            Import previously exported settings to restore your configuration
+          </div>
+          <div class="form-group">
+            <label for="settingsFileInput" data-i18n="selectSettingsFile">Select settings file:</label>
+            <input type="file" id="settingsFileInput" accept=".json" style="margin-bottom: 16px; padding: 8px; border: 1px solid #e1e5e9; border-radius: 8px; width: 100%;">
+            
+            <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+              <button id="previewImportSettingsBtn" class="btn" style="background: #17a2b8; color: white;">
+                <span>👁️</span>
+                <span data-i18n="preview">Preview</span>
+              </button>
+              <button id="importSettingsBtn" class="btn btn-primary">
+                <span>📥</span>
+                <span data-i18n="import">Import</span>
+              </button>
+            </div>
+            
+            <div id="importSettingsPreview" style="display: none; margin-bottom: 16px;">
+              <div style="margin-bottom: 8px; font-weight: 500;" data-i18n="importPreviewTitle">Import Preview:</div>
+              <div id="importSettingsPreviewContent" style="max-height: 300px; overflow-y: auto; border: 1px solid #e1e5e9; border-radius: 8px; padding: 12px; background: #f9f9f9; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 12px; line-height: 1.4; white-space: pre-wrap;">
+              </div>
+            </div>
+            
+            <div class="help-text" data-i18n="importSettingsHelp">
+              Import settings from a previously exported JSON file. This will replace all current settings. Note: Keyboard shortcuts cannot be imported; please set them manually.
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>🔄</span>
+            <span data-i18n="resetSettings">Reset Settings</span>
+          </div>
+          <div class="card-description" data-i18n="resetSettingsDesc">
+            Reset all settings to their default values
+          </div>
+          <div class="form-group">
+            <div style="padding: 12px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 8px; margin-bottom: 16px;">
+              <div style="color: #856404; font-weight: 500; margin-bottom: 4px;">⚠️ <span data-i18n="warning">Warning</span></div>
+              <div style="color: #856404; font-size: 13px;" data-i18n="resetWarning">
+                This action will permanently delete all your current settings and restore defaults. This cannot be undone.
+              </div>
+            </div>
+            
+            <button id="resetSettingsBtn" class="btn" style="background: #dc3545; color: white;">
+              <span>🔄</span>
+              <span data-i18n="resetToDefaults">Reset to Defaults</span>
+            </button>
+            
+            <div class="help-text" data-i18n="resetHelp">
+              Consider exporting your current settings before resetting, in case you want to restore them later.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Session Management Section -->
+      <section id="session" class="content-section">
+        <div class="section-header">
+          <h2 data-i18n="sessionManagement">Session Management</h2>
+          <p data-i18n="sessionManagementDesc">Export and import all tabs from all windows</p>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>📤</span>
+            <span data-i18n="exportSessions">Export Sessions</span>
+          </div>
+          <div class="card-description" data-i18n="exportSessionsDesc">
+            Export all tabs from all windows to save your current browsing session
+          </div>
+          <div class="form-group">
+            <label for="exportFormat" data-i18n="exportFormat">Export format:</label>
+            <div style="display: flex; gap: 8px; margin-bottom: 16px; align-items: center;">
+              <select id="exportFormat" style="padding: 8px 12px; border: 2px solid #e1e5e9; border-radius: 8px; font-size: 14px; min-width: 120px;">
+                <option value="json" data-i18n="formatJson">JSON</option>
+                <option value="txt" data-i18n="formatTxt">TXT</option>
+              </select>
+              <button id="exportPreviewBtn" class="btn" style="background: #17a2b8; color: white;">
+                <span>👁️</span>
+                <span data-i18n="preview">Preview</span>
+              </button>
+              <button id="exportBtn" class="btn btn-primary">
+                <span>📤</span>
+                <span data-i18n="export">Export</span>
+              </button>
+            </div>
+            
+            <div id="exportPreview" style="display: none; margin-bottom: 16px;">
+              <div style="margin-bottom: 8px; font-weight: 500;" data-i18n="exportPreviewTitle">Export Preview:</div>
+              <div id="exportPreviewContent" style="max-height: 300px; overflow-y: auto; border: 1px solid #e1e5e9; border-radius: 8px; padding: 12px; background: #f9f9f9; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 12px; line-height: 1.4; white-space: pre-wrap;">
+              </div>
+            </div>
+            
+            <div class="help-text">
+              <div data-i18n="exportHelpJson">JSON format: Array of windows with title and URL for each tab</div>
+              <div data-i18n="exportHelpTxt">TXT format: One URL per line, windows separated by blank lines</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>📥</span>
+            <span data-i18n="importSessions">Import Sessions</span>
+          </div>
+          <div class="card-description" data-i18n="importSessionsDesc">
+            Import tabs from previously exported session files
+          </div>
+          <div class="form-group">
+            <label for="sessionFileInput" data-i18n="selectSessionFile">Select session file:</label>
+            <input type="file" id="sessionFileInput" accept=".txt,.json" style="margin-bottom: 16px; padding: 8px; border: 1px solid #e1e5e9; border-radius: 8px; width: 100%;">
+            
+            <div class="form-group">
+              <label class="checkbox-group">
+                <input type="checkbox" id="importAsSuspended" checked />
+                <span data-i18n="importAsSuspended">Import tabs as suspended (saves memory)</span>
+              </label>
+              <div class="help-text" data-i18n="importAsSuspendedHelp">
+                When enabled, imported tabs will be suspended immediately to save memory
+              </div>
+            </div>
+            
+            <div style="display: flex; gap: 8px;">
+              <button id="previewSessionBtn" class="btn" style="background: #17a2b8; color: white;">
+                <span>👁️</span>
+                <span data-i18n="preview">Preview</span>
+              </button>
+              <button id="importSessionBtn" class="btn btn-primary">
+                <span>📥</span>
+                <span data-i18n="import">Import</span>
+              </button>
+            </div>
+            
+            <div id="sessionPreview" style="display: none; margin-top: 16px;">
+              <div style="margin-bottom: 8px; font-weight: 500;" data-i18n="sessionPreviewTitle">Session Preview:</div>
+              <div id="sessionPreviewContent" style="max-height: 300px; overflow-y: auto; border: 1px solid #e1e5e9; border-radius: 8px; padding: 12px; background: #f9f9f9; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 12px; line-height: 1.4;">
+              </div>
+            </div>
+            
+            <div class="help-text" data-i18n="importHelp">
+              Supports TXT and JSON formats. TXT files should have one URL per line with blank lines separating windows. JSON files should contain an array of windows with tab objects.
+            </div>
+          </div>
+        </div>
+
+        <!-- Import Progress -->
+        <div id="importProgressContainer" style="display: none; margin-top: 16px;">
+          <div class="card">
+            <div class="card-title">
+              <span>⏳</span>
+              <span data-i18n="importProgress">Import Progress</span>
+            </div>
+            <div style="margin-bottom: 8px; font-size: 14px; color: #666;">
+              <span data-i18n="importProgressText">Progress:</span>
+              <span id="importProgressText">0/0</span>
+            </div>
+            <div class="progress-bar" style="width: 100%; height: 8px; background-color: #e1e5e9; border-radius: 4px; overflow: hidden;">
+              <div id="importProgressFill" style="height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); width: 0%; transition: width 0.3s ease;"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Keyboard Shortcuts Section -->
+      <section id="shortcuts" class="content-section">
+        <div class="section-header">
+          <h2 data-i18n="keyboardShortcuts">Keyboard Shortcuts</h2>
+          <p data-i18n="keyboardShortcutsDesc">View and manage extension keyboard shortcuts</p>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>⌨️</span>
+            <span data-i18n="shortcutsList">Available Shortcuts</span>
+          </div>
+          <div class="card-description" data-i18n="shortcutsHelp">
+            Below are the keyboard shortcuts configured for this extension. To modify shortcuts, click "Manage Shortcuts" to open Chrome's extension shortcuts page.
+          </div>
+          <div class="form-group">
+            <div id="shortcutsContainer" style="margin-bottom: 16px;">
+              <div class="loading-state" style="text-align: center; padding: 20px; color: #666;">
+                <span data-i18n="loadingShortcuts">Loading shortcuts...</span>
+              </div>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button id="manageShortcutsBtn" class="btn btn-primary">
+                <span>⚙️</span>
+                <span data-i18n="manageShortcuts">Manage Shortcuts</span>
+              </button>
+              <button id="refreshShortcutsBtn" class="btn" style="background: #e1e5e9; color: #333;">
+                <span>🔄</span>
+                <span data-i18n="refresh">Refresh</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab Viewer Section -->
+      <section id="tabviewer" class="content-section">
+        <div class="section-header">
+          <h2 data-i18n="tabViewer">Tab Viewer</h2>
+          <p data-i18n="tabViewerDesc">View and manage all suspended tabs</p>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>😴</span>
+            <span data-i18n="suspendedTabsViewer">Suspended Tabs Viewer</span>
+          </div>
+          <div class="card-description" data-i18n="suspendedTabsViewerDesc">
+            View all suspended tabs across all windows and check their discard status
+          </div>
+          <div class="help-text" style="margin-top: 0; margin-bottom: 12px;" data-i18n="suspendedTabsDiscardsHint">
+            You can also check discard details in chrome://discards.
+          </div>
+          <div class="form-group">
+            <div class="viewer-filter-row">
+              <label class="viewer-filter-label" for="suspendedTabsFilter" data-i18n="tabViewerFilterLabel">Filter:</label>
+              <select id="suspendedTabsFilter" class="viewer-filter-select">
+                <option value="suspended-all" data-i18n="tabViewerFilterSuspendedAll">All suspended tabs</option>
+                <option value="suspended-undiscarded" data-i18n="tabViewerFilterSuspendedUndiscarded">Suspended but not discarded</option>
+                <option value="not-suspended" data-i18n="tabViewerFilterNotSuspended">Not suspended</option>
+              </select>
+            </div>
+            <button id="showSuspendedTabsBtn" class="btn" style="background: #17a2b8; color: white; margin-bottom: 16px;">
+              <span>📊</span>
+              <span data-i18n="showSuspendedTabs">Show Suspended Tabs</span>
+            </button>
+            <div id="suspendedTabsInfo" style="display: none;">
+              <div style="margin-bottom: 8px; font-weight: 500;" data-i18n="suspendedTabsTitle">Suspended Tabs Information:</div>
+              <div id="suspendedTabsCount" style="margin-bottom: 12px; color: #667eea; font-weight: 500;"></div>
+              <div id="suspendedTabsList" class="suspended-tabs-list">
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab Migration Section -->
+      <section id="migration" class="content-section">
+        <div class="section-header">
+          <h2 data-i18n="tabMigration">Tab Migration</h2>
+          <p data-i18n="tabMigrationDesc">Migrate suspended tabs from other tab suspension extensions</p>
+        </div>
+
+        <div class="help-text" style="margin: 0 0 24px 0; padding: 12px; background: #f0f9ff; border-left: 3px solid #3b82f6; font-size: 13px; border-radius: 0 8px 8px 0;">
+          <div class="help-text" data-i18n="tabMigrationHelp">This feature allows you to convert suspended tabs from other tab suspension extensions (like The Marvellous Suspender) to ZeroRAM Suspender format, so you can continue using those tabs.</div>
+          <div class="help-text" style="margin-top: 8px;">
+            <strong data-i18n="migrationTip">💡 Tip:</strong> <span data-i18n="migrationTipDesc">This tool can automatically detect both known and unknown versions of The Marvellous Suspender. If you find tabs from other similar extensions, they may also be detected.</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>🔍</span>
+            <span data-i18n="marvellousTabDetection">The Marvellous Suspender Tab Detection</span>
+          </div>
+          <div class="card-description" data-i18n="marvellousTabDetectionDesc">
+            Automatically detect and provide migration for The Marvellous Suspender suspended tabs
+          </div>
+          <div class="form-group">
+            <button id="scanMarvellousBtn" class="btn btn-primary" style="margin-bottom: 16px;">
+              <span>🔍</span>
+              <span data-i18n="scanForMarvellousTab">Scan for The Marvellous Suspender tabs</span>
+            </button>
+            <div id="migrationResults" style="display: none;">
+              <div id="migrationStatus" style="margin-bottom: 16px; font-weight: 500;"></div>
+              <div id="tabsList" style="display: none;">
+                <div style="margin-bottom: 12px; display: flex; gap: 8px;">
+                  <button id="selectAllBtn" class="btn" style="background: #e1e5e9; color: #333;">
+                    <span data-i18n="selectAllTabs">Select All</span>
+                  </button>
+                  <button id="deselectAllBtn" class="btn" style="background: #e1e5e9; color: #333;">
+                    <span data-i18n="deselectAllTabs">Deselect All</span>
+                  </button>
+                </div>
+                <div id="tabsContainer" style="max-height: 300px; overflow-y: auto; border: 1px solid #e1e5e9; border-radius: 8px; padding: 12px; background: #f9f9f9;">
+                </div>
+                <!-- Migration Progress Bar -->
+                <div id="migrationProgressContainer" style="display: none; margin-top: 16px;">
+                  <div style="margin-bottom: 8px; font-size: 14px; color: #666;">
+                    <span data-i18n="migrationProgress">Migration Progress:</span>
+                    <span id="progressText">0/0</span>
+                  </div>
+                  <div class="progress-bar" style="width: 100%; height: 8px; background-color: #e1e5e9; border-radius: 4px; overflow: hidden;">
+                    <div id="progressFill" style="height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); width: 0%; transition: width 0.3s ease;"></div>
+                  </div>
+                </div>
+                <button id="migrateSelectedBtn" class="btn btn-primary" style="margin-top: 16px;">
+                  <span>🔄</span>
+                  <span data-i18n="migrateSelected">Migrate selected tabs</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>🔍</span>
+            <span data-i18n="tabSuspenderDetection">Tab Suspender Tab Detection</span>
+          </div>
+          <div class="card-description" data-i18n="tabSuspenderDetectionDesc">
+            Automatically detect and provide migration for Tab Suspender suspended tabs
+          </div>
+          <div class="form-group">
+            <button id="scanTabSuspenderBtn" class="btn btn-primary" style="margin-bottom: 16px;">
+              <span>🔍</span>
+              <span data-i18n="scanForTabSuspenderTab">Scan for Tab Suspender tabs</span>
+            </button>
+            <div id="tabSuspenderResults" style="display: none;">
+              <div id="tabSuspenderStatus" style="margin-bottom: 16px; font-weight: 500;"></div>
+              <div id="tabSuspenderTabsList" style="display: none;">
+                <div style="margin-bottom: 12px; display: flex; gap: 8px;">
+                  <button id="selectAllTabSuspenderBtn" class="btn" style="background: #e1e5e9; color: #333;">
+                    <span data-i18n="selectAllTabs">Select All</span>
+                  </button>
+                  <button id="deselectAllTabSuspenderBtn" class="btn" style="background: #e1e5e9; color: #333;">
+                    <span data-i18n="deselectAllTabs">Deselect All</span>
+                  </button>
+                </div>
+                <div id="tabSuspenderTabsContainer" style="max-height: 300px; overflow-y: auto; border: 1px solid #e1e5e9; border-radius: 8px; padding: 12px; background: #f9f9f9;">
+                </div>
+                <!-- Migration Progress Bar -->
+                <div id="tabSuspenderProgressContainer" style="display: none; margin-top: 16px;">
+                  <div style="margin-bottom: 8px; font-size: 14px; color: #666;">
+                    <span data-i18n="migrationProgress">Migration Progress:</span>
+                    <span id="tabSuspenderProgressText">0/0</span>
+                  </div>
+                  <div class="progress-bar" style="width: 100%; height: 8px; background-color: #e1e5e9; border-radius: 4px; overflow: hidden;">
+                    <div id="tabSuspenderProgressFill" style="height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); width: 0%; transition: width 0.3s ease;"></div>
+                  </div>
+                </div>
+                <button id="migrateTabSuspenderBtn" class="btn btn-primary" style="margin-top: 16px;">
+                  <span>🔄</span>
+                  <span data-i18n="migrateSelected">Migrate selected tabs</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>🛠️</span>
+            <span data-i18n="customTabDetection">Custom Suspended Tab Detection</span>
+          </div>
+          <div class="card-description" data-i18n="customTabDetectionDesc">
+            Configure custom detection pattern for other suspended tab extensions
+          </div>
+          <div class="form-group">
+            <label data-i18n="customPatternLabel">Custom URL Pattern:</label>
+            <div style="font-family: monospace; font-size: 14px; color: #666; margin-bottom: 16px; padding: 12px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid #007bff;">
+              chrome-extension://<strong>ExtensionID</strong>/<strong>Path</strong><strong>[?|#]</strong><strong>TitleParam</strong>=Title&<strong>URLParam</strong>=URL
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+              <div>
+                <label for="customExtensionId" data-i18n="extensionIdLabel">Extension ID:</label>
+                <input type="text" id="customExtensionId" placeholder="abcdefghijklmnopqrstuvwxyz123456" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace;">
+              </div>
+              <div>
+                <label for="customPath" data-i18n="pathLabel">Path:</label>
+                <input type="text" id="customPath" placeholder="suspended.html" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace;">
+              </div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: auto 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+              <div>
+                <label for="customSeparator" data-i18n="separatorLabel">Separator:</label>
+                <select id="customSeparator" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                  <option value="?">? (Query String)</option>
+                  <option value="#"># (Hash Fragment)</option>
+                </select>
+              </div>
+              <div>
+                <label for="customTitleParam" data-i18n="titleParamLabel">Title Parameter:</label>
+                <input type="text" id="customTitleParam" placeholder="title" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace;">
+              </div>
+              <div>
+                <label for="customUrlParam" data-i18n="urlParamLabel">URL Parameter:</label>
+                <input type="text" id="customUrlParam" placeholder="url" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace;">
+              </div>
+            </div>
+            
+            <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+              <button id="testCustomPatternBtn" class="btn" style="background: #17a2b8; color: white;">
+                <span>🧪</span>
+                <span data-i18n="testPattern">Test Pattern</span>
+              </button>
+              <button id="scanCustomBtn" class="btn btn-primary">
+                <span>🔍</span>
+                <span data-i18n="scanCustomTabs">Scan for Custom Tabs</span>
+              </button>
+            </div>
+            
+            <div id="customResults" style="display: none;">
+              <div id="customStatus" style="margin-bottom: 16px; font-weight: 500;"></div>
+              <div id="customTabsList" style="display: none;">
+                <div style="margin-bottom: 12px; display: flex; gap: 8px;">
+                  <button id="selectAllCustomBtn" class="btn" style="background: #e1e5e9; color: #333;">
+                    <span data-i18n="selectAllTabs">Select All</span>
+                  </button>
+                  <button id="deselectAllCustomBtn" class="btn" style="background: #e1e5e9; color: #333;">
+                    <span data-i18n="deselectAllTabs">Deselect All</span>
+                  </button>
+                </div>
+                <div id="customTabsContainer" style="max-height: 300px; overflow-y: auto; border: 1px solid #e1e5e9; border-radius: 8px; padding: 12px; background: #f9f9f9;">
+                </div>
+                <!-- Migration Progress Bar -->
+                <div id="customProgressContainer" style="display: none; margin-top: 16px;">
+                  <div style="margin-bottom: 8px; font-size: 14px; color: #666;">
+                    <span data-i18n="migrationProgress">Migration Progress:</span>
+                    <span id="customProgressText">0/0</span>
+                  </div>
+                  <div class="progress-bar" style="width: 100%; height: 8px; background-color: #e1e5e9; border-radius: 4px; overflow: hidden;">
+                    <div id="customProgressFill" style="height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); width: 0%; transition: width 0.3s ease;"></div>
+                  </div>
+                </div>
+                <button id="migrateCustomBtn" class="btn btn-primary" style="margin-top: 16px;">
+                  <span>🔄</span>
+                  <span data-i18n="migrateSelected">Migrate selected tabs</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Advanced Settings Section -->
+      <section id="advanced" class="content-section">
+        <div class="section-header">
+          <h2 data-i18n="advancedSettings">Advanced Settings</h2>
+          <p data-i18n="advancedSettingsDesc">Advanced user options</p>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>🎨</span>
+            <span data-i18n="themeSettings">Theme Settings</span>
+          </div>
+          <div class="card-description" data-i18n="themeSettingsDesc">
+            Choose the appearance theme for the suspended tab page
+          </div>
+          <div class="form-group">
+            <label for="themeMode" data-i18n="themeMode">Theme mode:</label>
+            <select id="themeMode" style="padding: 10px 12px; border: 2px solid #e1e5e9; border-radius: 8px; font-size: 14px; transition: all 0.2s ease; min-width: 180px;">
+              <option value="auto" data-i18n="themeAuto">Follow system/browser theme</option>
+              <option value="light" data-i18n="themeLight">Light theme</option>
+              <option value="dark" data-i18n="themeDark">Dark theme</option>
+            </select>
+            <div class="help-text" data-i18n="themeHelpText">
+              The theme setting only applies to the suspended tab page. Auto mode will follow your system's dark/light theme preference.
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>💤</span>
+            <span data-i18n="suspendedIndicatorTitle">Suspended Tab Indicator</span>
+          </div>
+          <div class="card-description" data-i18n="suspendedIndicatorDesc">
+            Choose how a suspended tab is marked in the tab strip
+          </div>
+          <div class="form-group">
+            <label for="suspendedIndicatorMode" data-i18n="suspendedIndicatorLabel">Suspended tab indicator:</label>
+            <select id="suspendedIndicatorMode" style="padding: 10px 12px; border: 2px solid #e1e5e9; border-radius: 8px; font-size: 14px; transition: all 0.2s ease; min-width: 180px;">
+              <option value="favicon" data-i18n="suspendedIndicatorFavicon">Semi-transparent favicon (default)</option>
+              <option value="titlePrefix" data-i18n="suspendedIndicatorTitlePrefix">Title 💤 prefix</option>
+            </select>
+            <div class="help-text" data-i18n="suspendedIndicatorHelp">
+              Semi-transparent favicon dims the site's icon as the cue: it keeps the site identity but is subtle on tiny tabs and slightly heavier. Title 💤 prefix adds a sleep emoji before the tab title and keeps the favicon at full opacity: it is lighter, but the cue is hidden on very narrow or pinned tabs that show no title.
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>🖼️</span>
+            <span data-i18n="fixFaviconSectionTitle">Suspended Favicon Fix</span>
+          </div>
+          <div class="card-description" data-i18n="fixFaviconSectionDesc">
+            Control how the extension tries to restore missing favicons on suspended tabs
+          </div>
+          <div class="form-group">
+            <label class="checkbox-group">
+              <input type="checkbox" id="fixFaviconEnabled" checked />
+              <span data-i18n="fixFaviconEnabled">Fix suspended tab favicon (recommended)</span>
+            </label>
+            <div class="help-text" data-i18n="fixFaviconEnabledHelp">
+              When a suspended tab shows no favicon after browser restart, try to reload it briefly and discard again to restore its favicon.
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="fixFaviconBatchSize" data-i18n="fixFaviconBatchSize">Max tabs to process per scan (0 = unlimited):</label>
+            <input type="number" id="fixFaviconBatchSize" min="0" step="1" />
+            <div class="help-text" data-i18n="fixFaviconBatchSizeHelp">
+              Limit how many tabs are processed each time the background scan runs. This helps avoid long processing when many tabs need fixes.
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="fixFaviconMaxRetries" data-i18n="fixFaviconMaxRetries">Max retries per tab:</label>
+            <input type="number" id="fixFaviconMaxRetries" min="0" step="1" />
+            <div class="help-text" data-i18n="fixFaviconMaxRetriesHelp">
+              Prevent infinite retries for tabs that cannot be fixed. Set 0 to disable the limit.
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>⚡</span>
+            <span data-i18n="bulkConcurrencyTitle">Bulk Suspension Concurrency</span>
+          </div>
+          <div class="card-description" data-i18n="bulkConcurrencyDesc">
+            Control the speed and performance of suspending multiple tabs at once
+          </div>
+          <div class="form-group">
+            <label for="suspendBatchConcurrency" data-i18n="suspendBatchConcurrencyLabel">Batch concurrency limit (recommended: 5):</label>
+            <input type="number" id="suspendBatchConcurrency" min="1" step="1" />
+            <div class="help-text" data-i18n="suspendBatchConcurrencyHelp">
+              How many tabs to suspend in parallel when performing bulk operations (like "Suspend Others" or "Suspend All"). Higher values are faster but consume more CPU/memory temporarily.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- About Section -->
+      <section id="about" class="content-section">
+        <div class="section-header">
+          <h2 data-i18n="aboutSettings">About</h2>
+          <p data-i18n="aboutDesc">Extension information and details</p>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <div class="icon">
+              <img src="icons/icon16.png" alt="ZeroRAM" style="width: 16px; height: 16px;">
+            </div>
+            <span data-i18n="extName">ZeroRAM Suspender</span>
+          </div>
+          <div class="card-description">
+            <p><span class="item-title"><span data-i18n="version">Version</span>:</span> <span id="version"></span></p>
+            <p><span class="item-title"><span data-i18n="description">Description</span>:</span> <span data-i18n="extDescription">Save memory by suspending idle tabs</span></p>
+            <p><span class="item-title"><span data-i18n="supportWebsite">Website</span>:</span> <a href="https://github.com/yhchiu/ZeroRAM-Suspender" target="_blank" style="color: #667eea; text-decoration: none;">github.com/yhchiu/ZeroRAM-Suspender</a></p>
+            <p><a href="https://github.com/yhchiu/ZeroRAM-Suspender/issues" target="_blank" style="color: #667eea; text-decoration: none; background-color: #f8f9fa; border: 1px solid #667eea; padding: 8px 16px; border-radius: 4px; display: inline-block; font-size: 14px; margin-top: 8px;" data-i18n="reportIssue">Report Bug or Request Feature</a></p>
+            <p><a href="https://chromewebstore.google.com/detail/zeroram-suspender/nlnebbghnncihbiabpnhemjamfmjappo" target="_blank" style="color: #667eea; text-decoration: none; background-color: #f0f8ff; border: 1px solid #667eea; padding: 8px 16px; border-radius: 4px; display: inline-block; font-size: 14px; margin-top: 8px;" data-i18n="rateUs">⭐ Rate us on Chrome Web Store</a></p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>🔒</span>
+            <span data-i18n="privacyNotice">Privacy Notice</span>
+          </div>
+          <div class="card-description">
+            <p data-i18n="privacyNoticeText">This extension only processes data locally and does not upload any information to external servers</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>📜</span>
+            <span data-i18n="licenseCredits">License & Credits</span>
+          </div>
+          <div class="card-description">
+            <p data-i18n="licenseText">This extension is released under the GNU General Public License v3 (GPL v3). You are free to use, modify, and distribute this software under the terms of the GPL v3.</p>
+            <p><span data-i18n="copyrightText">Copyright (C) Yu-Hsiung Chiu</span></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Change Log Section -->
+      <section id="changelog" class="content-section">
+        <div class="section-header">
+          <h2 data-i18n="changeLogSettings">Change Log</h2>
+          <p data-i18n="changeLogDesc">Version history and feature updates</p>
+        </div>
+
+        <div id="changelogContent">
+          <div class="loading-state" style="text-align: center; padding: 40px; color: #666;">
+            <div style="font-size: 24px; margin-bottom: 12px;">⏳</div>
+            <span data-i18n="loadingChanges">Loading change log...</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Action Bar -->
+      <div class="action-bar">
+        <div class="status-message" id="status"></div>
+        <button id="saveBtn" class="btn btn-primary" data-i18n="saveButton">
+          <span>💾</span>
+          <span>Save</span>
+        </button>
+      </div>
+    </main>
+  </div>
+
+  <script src="i18n.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
