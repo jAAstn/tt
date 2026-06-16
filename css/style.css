@@ -1,0 +1,874 @@
+html,
+body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+    font-size: 10px;
+    visibility: hidden;
+}
+
+html {
+    box-sizing: border-box;
+    height: 100vh;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: inherit;
+}
+
+body {
+    min-height: 100%;
+    font-family: system-ui, 'Segoe UI', Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+    font-size: 1.5rem;
+    line-height: 1.5em;
+    background: #fafafa;
+    color: #444;
+}
+
+@media (min-resolution: 192dpi) {
+    body {
+        font-weight: 300;
+    }
+}
+
+/* 'content' pages alignment (suspended tabs have their own overrides) */
+/* apply to body tag */
+.splash-wrap {
+    display: flex;
+    justify-content: center;
+    /*
+    vertical center usually looks a little better but some pages have content
+    which changes height (accordion etc) so this doesn't really work
+    */
+    /* align-items: center; */
+}
+
+strong {
+    font-weight: 600;
+}
+
+small {
+    font-size: smaller;
+}
+
+h1 {
+    font-size: 26px;
+    margin-bottom: 20px;
+}
+
+p {
+    margin: 0 0 15px;
+}
+
+a {
+    color: #3477db;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+a.active {
+    cursor: default;
+    color: #444;
+    pointer-events: none;
+}
+
+hr {
+    border-width: 0;
+    border-top: 1px solid #888;
+    height: 1px;
+    margin: 23px 0;
+}
+
+.fl {
+    float: left;
+    margin-right: 10px;
+}
+
+.fr {
+    float: right;
+    margin-left: 10px;
+}
+
+.topLabel {
+    display: inline-block;
+    margin: 0 0 8px;
+}
+
+select {
+    min-width: 150px;
+    color: #444;
+    background: #fff;
+    border-radius: 3px;
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+    padding: 10px 30px 10px 15px;
+    font-size: 14px;
+    border-color: #ccc;
+    position: relative;
+    cursor: pointer;
+}
+
+.select-wrapper {
+    background-color: #fff;
+    display: inline-block;
+    position: relative;
+}
+
+.select-wrapper::after {
+    position: absolute;
+    right: 15px;
+    top: 6px;
+    font-family: 'fontello';
+    text-decoration: none;
+    content: '\f0dd';
+    color: #3477db;
+    pointer-events: none;
+}
+
+textarea {
+    color: #444;
+    width: 100%;
+    border-color: #c3c3c3;
+    font-size: 14px;
+    padding: 3px 5px;
+    white-space: nowrap;
+    margin-top: 9px;
+	height: 390px;
+	width: 1008px;
+}
+
+.formRow {
+    margin: 0 0 20px;
+}
+
+ul.unorderedList,
+ol.orderedList {
+    padding-left: 20px;
+    margin: 7px 0 10px 0;
+}
+
+ul.unorderedList li {
+    margin: 0 0 3 10px;
+    list-style: disc;
+}
+
+#tmsUpdateAvailable {
+  display: none;
+}
+#tmsUpdateAvailable .splash {
+    margin: 0 auto;
+}
+.splash {
+    padding: 0 20px;
+    margin: 50px auto;
+    display: grid;
+    grid-template-columns: 150px 1fr;
+    grid-gap: 30px;
+}
+
+.suspendy-guy {
+    width: 100%;
+}
+
+#suspendy-guy-inprogress {
+    max-height: 220px;
+    max-width: 137px;
+}
+
+#suspendy-guy-complete {
+    max-height: 220px;
+}
+
+.btn {
+    background: #3477db;
+    color: #fff;
+    border-radius: 3px;
+    height: 40px;
+    line-height: 40px;
+    padding: 0 20px;
+    display: inline-block;
+    border: 0;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+
+    min-width: 80px;
+    text-align: center;
+}
+
+.btn:hover {
+    background: #5c9dfe;
+    text-decoration: none;
+}
+
+.btn.btnNeg {
+    background: #ddd;
+    color: #333;
+}
+
+.btn.btnNeg:hover {
+    background: #ccc;
+}
+
+.btnDisabled {
+    background: #f1f1f1;
+    color: #888;
+    cursor: default;
+}
+
+.btnDisabled:hover {
+    background: #f1f1f1;
+    color: #888;
+}
+
+.lesserText {
+    color: #999;
+}
+
+
+.hidden {
+    visibility: hidden;
+}
+.visible {
+    visibility: visible !important;
+}
+.reallyHidden {
+    display: none;
+}
+.center {
+    text-align: center;
+}
+.italic {
+    font-style: italic;
+}
+
+.mainContent {
+    width: 750px;
+    margin: 50px auto;
+    display: grid;
+    /* defining first col width because 'auto' could change due to bold text on active item */
+    grid-template-columns: 200px auto;
+    grid-column-gap: 40px;
+    grid-template-areas:
+    'h h'
+    'n m';
+}
+
+.pageHeader {
+    grid-area: h;
+    margin: 0 0 50px;
+    font-size: 20px;
+}
+
+.contentNav {
+    grid-area: n;
+    border-right: 1px solid #888;
+    padding-right: 15px;
+    align-self: start;
+}
+
+.contentNav ul {
+    padding: 0;
+    margin: 0;
+    list-style-type: none;
+}
+
+.contentNav a {
+    font-size: 16px;
+    margin-bottom: 20px;
+    color: #888;
+    display: block;
+}
+
+.contentNav .active {
+    color: #3477db;
+    font-weight: bold;
+}
+
+.content {
+    grid-area: m;
+    font-size: 14px;
+}
+
+.content h2 {
+    font-size: 16px;
+    font-weight: bold;
+    margin: 0 0 30px;
+}
+
+.heading-note {
+    font-style: italic;
+    margin-top: -25px;
+    margin-bottom: 25px;
+}
+
+.welcome-message {
+    width: 90%;
+    border-radius: 6px;
+    padding: 30px;
+    margin-bottom: 20px;
+    align-items: center;
+    grid-gap: 40px;
+    border: 1px solid #888;
+    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.16), 0 3px 6px rgba(0, 0, 0, 0.23);
+}
+
+.gsNote {
+    font-style: italic;
+    font-size: 12px;
+    background: rgb(255, 247, 202);
+    padding: 5px;
+    margin-top: 5px;
+}
+
+.sessionLink {
+    cursor: pointer;
+}
+
+.sessionLink:hover {
+    text-decoration: underline;
+}
+
+.tabContainer {
+    padding: 0px;
+    margin: 0 0 5px 0;
+}
+
+.tabContainer > * {
+    vertical-align: middle;
+}
+
+a.historyLink {
+    padding-left: 5px;
+    color: #333;
+    font-size: 13px;
+    text-decoration: none;
+    max-width: 90%;
+    overflow: hidden;
+    display: inline-block;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+a.historyLink:hover {
+    text-decoration: underline;
+}
+
+.windowContainer {
+    font-weight: bold;
+    margin: 20px 0 10px;
+}
+
+.groupLink {
+    margin: 0 0 0 10px;
+    font-size: 11px;
+    font-weight: normal;
+}
+
+.sessionContainer {
+    white-space: nowrap;
+    margin: 0 0 5px;
+}
+
+.sessionContainer .groupLink {
+    visibility: hidden;
+}
+
+.sessionContainer:hover .groupLink {
+    visibility: visible;
+}
+
+.sessionContents {
+    margin-left: 28px;
+}
+
+/* container for a group of sessions */
+.sessionsContainer {
+    margin-bottom: 50px;
+}
+
+.sessionIcon {
+    cursor: pointer;
+    margin: 0 10px 0 -3px;
+}
+
+.sessionContents div:last-child {
+    padding-bottom: 10px;
+}
+
+.tabContainer .itemHover {
+    visibility: hidden;
+    margin: 0;
+    padding: 0 0 3px;
+    cursor: pointer;
+}
+
+.tabContainer:hover .itemHover {
+    visibility: visible;
+}
+
+.tabContainer .removeLink {
+    margin-left: -24px;
+    padding-right: 4px;
+    color: #888;
+    font-size: 14px;
+}
+
+#screenCaptureNotice {
+    display: none;
+    clear: left;
+    margin-top: 30px;
+    background: rgb(255, 247, 202);
+    padding: 10px 0 10px 10px;
+}
+
+#keyboardShortcuts {
+  display: grid;
+  grid-template-columns: max-content max-content;
+}
+#keyboardShortcuts div {
+  /* line-height:1.5rem; */
+  margin: 0 1rem 0.5rem
+}
+#keyboardShortcuts div.marginTop {
+  margin-top: 2rem;
+}
+
+.bottomMargin {
+    margin-bottom: 20px !important;
+}
+
+.hotkeyCommand {
+    word-spacing: -1px;
+    font-weight: 600;
+}
+
+/* custom checkboxes */
+input[type='checkbox'] {
+    position: absolute;
+    opacity: 0;
+}
+
+input[type='checkbox'] + label {
+    position: relative;
+    padding-left: 30px;
+    cursor: pointer;
+}
+
+input[type='checkbox'] + label:before {
+    position: absolute;
+    left: 0;
+    top: -2px;
+    font-family: 'fontello';
+    text-decoration: none;
+    content: '\f096';
+    color: #888;
+    font-size: 24px;
+    cursor: pointer;
+}
+
+input[type='checkbox']:checked + label:before {
+    content: '\f14a';
+    color: #3477db;
+}
+
+input[type='text'] {
+    border: 1px solid;
+    border-radius: 5px;
+    padding: 4px;
+}
+
+/* custom radio btns */
+.radio {
+    position: relative;
+    display: block;
+    margin-top: 15px;
+    margin-bottom: 15px;
+}
+
+.radio input[type='radio'] {
+    opacity: 0;
+    z-index: 1;
+}
+
+.radio input[type='radio']:checked + label::before {
+    border-color: #3477db;
+}
+
+.radio input[type='radio']:checked + label::after {
+    transform: scale(1, 1);
+}
+
+.radio input[type='radio']:checked + label::after {
+    background-color: #3477db;
+}
+
+.radio label {
+    display: inline-block;
+    vertical-align: middle;
+    position: relative;
+    padding-left: 5px;
+    cursor: pointer;
+}
+
+.radio label::before {
+    cursor: pointer;
+    content: '';
+    display: inline-block;
+    position: absolute;
+    width: 17px;
+    height: 17px;
+    left: 0;
+    top: 4px;
+    margin-left: -20px;
+    border: 1px solid #ccc;
+    border-radius: 50%;
+    background-color: #fff;
+}
+
+.radio label::after {
+    display: inline-block;
+    position: absolute;
+    content: ' ';
+    width: 13px;
+    height: 13px;
+    left: 2px;
+    top: 6px;
+    margin-left: -20px;
+    border-radius: 50%;
+    background-color: #555;
+    transform: scale(0, 0);
+}
+
+.sub-section {
+    margin-bottom: 35px;
+}
+
+.tooltipIcon {
+    color: #444;
+}
+
+/* Tooltips */
+[data-i18n-tooltip] {
+    position: relative;
+}
+
+[data-i18n-tooltip]::after {
+    content: attr(data-i18n-tooltip);
+    position: absolute;
+    left: 50%;
+    top: -6px;
+    transform: translateX(-50%) translateY(-100%);
+    background: #fff;
+    line-height: 20px;
+    color: #444;
+    padding: 4px 2px;
+    min-width: 500px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    pointer-events: none;
+    padding: 24px 24px 32px;
+    z-index: 99;
+    opacity: 0;
+    white-space: pre;
+}
+
+[data-i18n-tooltip]:hover::after {
+    opacity: 1;
+}
+
+@keyframes spinner {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.faviconSpinner {
+    position: relative;
+    display: inline-block;
+    min-width: 16px;
+    min-height: 16px;
+    margin-top: 4px;
+}
+
+.faviconSpinner:before {
+    content: '';
+    box-sizing: border-box;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 16px;
+    height: 16px;
+    margin-top: -10px;
+    margin-left: -10px;
+    border-radius: 50%;
+    border: 2px solid #ccc;
+    border-top-color: #333;
+    animation: spinner .6s linear infinite;
+}
+
+
+/* dark theme */
+/* Automatically set dark background based on OS settings */
+/* This prevents flickering on initial page load */
+@media (prefers-color-scheme: dark) {
+
+body, .option, .historyLink {
+    background: #222;
+    color: #ccc;
+}
+
+}
+
+/* when the OS is set to dark, but the user selects light mode, override the media query */
+.light, .light .option, .light .historyLink {
+    background: #fafafa;
+    color: #444;
+}
+
+/* set all explicit dark styles */
+.dark, .dark .option, .dark .historyLink {
+    background: #222;
+    color: #ccc;
+}
+.dark .tooltipIcon {
+    color: white;
+}
+.dark [data-i18n-tooltip]::after {
+    background: #333;
+    color: #aaa;
+    border: 1px solid #aaa;
+}
+
+
+/* tab groups */
+span.group {
+  color: #fff;
+  border-radius: 6px;
+  font-size: 0.8em;
+  padding: 0 5px 2px;
+}
+div.sessionContainer span.group {
+  margin: 0 8px 0 0;
+}
+
+/* tab group colors for light mode  */
+span.group.chrome.grey {
+  background: #5f6368
+}
+span.group.chrome.blue {
+  background: #1a73e8;
+}
+span.group.chrome.red {
+  background: #d93025;
+}
+span.group.chrome.yellow {
+  background: #f9ab00;
+}
+span.group.chrome.green {
+  background: #188038;
+}
+span.group.chrome.pink {
+  background: #d01884;
+}
+span.group.chrome.purple {
+  background: #a142f4;
+}
+span.group.chrome.cyan {
+  background: #007b83;
+}
+span.group.chrome.orange {
+  background: #fa903e;
+}
+
+span.group.edge.grey {
+  background: #706d6b
+}
+span.group.edge.blue {
+  background: #1a73e8;
+}
+span.group.edge.red {
+  background: #c239b3;
+}
+span.group.edge.yellow {
+  background: #986f0b;
+}
+span.group.edge.green {
+  background: #004e8c;
+}
+span.group.edge.pink {
+  background: #d01884;
+}
+span.group.edge.purple {
+  background: #8230ff;
+}
+span.group.edge.cyan {
+  background: #038387;
+}
+span.group.edge.orange {
+  background: #ca5010;
+}
+
+
+/* tab group colors for dark mode  */
+
+body.dark {
+span.group {
+  color: #000;
+}
+
+span.group.chrome.grey {
+  background: #dadce0;
+}
+span.group.chrome.blue {
+  background: #8ab4f8;
+}
+span.group.chrome.red {
+  background: #f28b82;
+}
+span.group.chrome.yellow {
+  background: #fdd663;
+}
+span.group.chrome.green {
+  background: #81c995;
+}
+span.group.chrome.pink {
+  background: #ff8bcb;
+}
+span.group.chrome.purple {
+  background: #c58af9;
+}
+span.group.chrome.cyan {
+  background: #78d9ec;
+}
+span.group.chrome.orange {
+  background: #fcad70;
+}
+
+span.group.edge.grey {
+  background: #84817e;
+}
+span.group.edge.blue {
+  background: #69a1fa;
+}
+span.group.edge.red {
+  background: #cf87da;
+}
+span.group.edge.yellow {
+  background: #c1a256;
+}
+span.group.edge.green {
+  background: #4a89ba;
+}
+span.group.edge.pink {
+  background: #ee5fb7;
+}
+span.group.edge.purple {
+  background: #b696ff;
+}
+span.group.edge.cyan {
+  background: #4cb4b7;
+}
+span.group.edge.orange {
+  background: #df8e64;
+}
+/* ==========================================================================
+   DOMAIN SUSPEND TIMES & WHITELIST (Verschoben wegen Chrome CSP)
+   ========================================================================== */
+
+/* ── Optionen-Styles (aus options.html) ── */
+#domainSuspendSection {
+  margin-top: 0;
+}
+#domainSuspendSection .ds-help {
+  font-size: 12px;
+  color: #666;
+  margin: 6px 0 10px;
+  line-height: 1.5;
+}
+.dark #domainSuspendSection .ds-help {
+  color: #999;
+}
+#domainSuspendSection .ds-format {
+  font-family: monospace;
+  background: #f4f4f4;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  color: #333;
+  margin-bottom: 8px;
+  white-space: pre;
+  display: inline-block;
+}
+.dark #domainSuspendSection .ds-format {
+  background: #2a2a2a;
+  border-color: #444;
+  color: #bbb;
+}
+#domainSuspendTimes {
+  height: 160px;
+  width: 100%;
+  max-width: 600px;
+  font-family: monospace;
+  font-size: 13px;
+  resize: vertical;
+}
+#domainSuspendPreview {
+  margin-top: 8px;
+  max-width: 600px;
+}
+.ds-valid-values {
+  font-size: 11px;
+  color: #888;
+  margin-top: 4px;
+}
+.dark .ds-valid-values {
+  color: #666;
+}
+
+/* ── Whitelist Textarea Fix ── */
+#whitelist {
+  height: 390px;
+  width: 1008px;
+}
+
+/* ── Domain Suspend Preview Table (aus options.js) ── */
+.ds-preview-empty {
+  color: #888;
+  font-size: 12px;
+  font-style: italic;
+}
+.ds-preview-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 6px;
+  width: 100%;
+}
+.ds-preview-table th {
+  padding: 4px 8px;
+  text-align: left;
+  border: 1px solid #ccc;
+  background: #f0f0f0;
+}
+.dark .ds-preview-table th {
+  border-color: #444;
+  background: #2a2a2a;
+  color: #eee;
+}
+.ds-preview-table td {
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+}
+.dark .ds-preview-table td {
+  border-color: #555;
+  color: #ddd;
+}
+}
