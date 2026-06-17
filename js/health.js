@@ -24,17 +24,10 @@ import  { gsSession }             from './gsSession.js';
 /**
    * @param {string} name
    */
-  function logClear(name) {
+function logClear(name) {
     const el = quickElemById(name);
     el.innerHTML = '';
-    
-    // Grid-Layout direkt per JS erzwingen (umgeht alle CSS-Cache-Probleme)
-    el.style.display = 'grid';
-    el.style.gridTemplateColumns = '60px auto 40px 1fr';
-    el.style.rowGap = '8px';
-    el.style.columnGap = '15px';
-    el.style.alignItems = 'center';
-    el.style.marginTop = '15px';
+    el.classList.add('health-log-container');
   }
 
   /**
@@ -43,19 +36,30 @@ import  { gsSession }             from './gsSession.js';
    * @param {string} txt
    * @param {string} [status]
    */
-  function log(name, num, txt, status = '') {
-    // Styling für bessere Lesbarkeit: Zahlen fett, Haken (✓) in Grün
-    const statusStyle = status.includes('✓') ? 'color: #188038; font-weight: bold;' : '';
-    quickElemById(name).innerHTML += `<div class="center" style="font-weight: 600;">${num}</div><div>${txt}</div><div class="center" style="${statusStyle}">${status}</div><div></div>`;
+function log(name, num, txt, status = '') {
+    const isCheckmark = status.includes('✓');
+    const statusClass = isCheckmark ? 'status-ok' : '';
+
+    quickElemById(name).insertAdjacentHTML('beforeend', `
+      <div class="health-row">
+        <div class="col-num">${num}</div>
+        <div class="col-txt">${txt}</div>
+        <div class="col-status ${statusClass}">${status}</div>
+      </div>
+    `);
   }
 
   /**
    * @param {string} name
    * @param {string} txt
    */
-  function warn(name, txt) {
-    // Warnungen rot hervorheben und über die restlichen 3 Spalten strecken
-    quickElemById(name).innerHTML += `<div class="center" style="color: #d93025; font-size: 1.2em;">&#9888;</div><div style="grid-column: span 3; color: #d93025;">${txt}</div>`;
+function warn(name, txt) {
+    quickElemById(name).insertAdjacentHTML('beforeend', `
+      <div class="health-row health-warn">
+        <div class="col-warn-icon">&#9888;</div>
+        <div class="col-warn-txt">${txt}</div>
+      </div>
+    `);
   }
 
   function reset() {

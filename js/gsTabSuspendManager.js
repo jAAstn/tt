@@ -201,6 +201,10 @@ export const gsTabSuspendManager = (function() {
   }
 
   function getQueuedTabDetails(tab) {
+    if (!_suspensionQueue) {
+      gsUtils.warning(QUEUE_ID, 'getQueuedTabDetails: suspensionQueue not initialized');
+      return null;
+    }
     return _suspensionQueue.getQueuedTabDetails(tab);
   }
 

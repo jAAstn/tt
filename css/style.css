@@ -248,20 +248,6 @@ ul.unorderedList li {
 .italic {
     font-style: italic;
 }
-/* FÜGE DAS HIER EIN - Ausserhalb aller Dark-Mode Media-Queries */
-.log {
-    display: grid !important;
-    grid-template-columns: 60px max-content 40px 1fr;
-    grid-column-gap: 15px;
-    grid-row-gap: 8px;
-    align-items: center;
-    margin-top: 15px;
-}
-
-.log .span-3 {
-    grid-column: span 3;
-    color: #d93025;
-}
 
 .mainContent {
     width: 750px;
@@ -885,4 +871,109 @@ span.group.edge.orange {
   border-color: #555;
   color: #ddd;
 }
+/* ==========================================================================
+   HEALTH PAGE LOG TABLE
+   ========================================================================== */
+.health-log-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+    font-size: 14px;
+}
+.health-log-table td {
+    padding: 6px 8px;
+    vertical-align: middle;
+}
+.health-log-table .col-num {
+    width: 60px;
+    text-align: center;
+    font-weight: 600;
+}
+.health-log-table .col-txt {
+    text-align: left;
+}
+.health-log-table .col-status {
+    width: 40px;
+    text-align: center;
+    font-size: 1.2em;
+}
+.health-log-table .status-ok {
+    color: #188038; /* Schönes Google-Grün für den Haken */
+    font-weight: bold;
+}
+.health-log-table .row-warn {
+    color: #d93025; /* Rot für Warnungen */
+}
+.health-log-table .col-warn-icon {
+    width: 60px;
+    text-align: center;
+    font-size: 1.4em;
+}
+
+/* Dark Mode Anpassungen */
+.dark .health-log-table .status-ok {
+    color: #81c995;
+}
+.dark .health-log-table .row-warn {
+    color: #f28b82;
+}
+}
+/* ==========================================================================
+   HEALTH PAGE LOG FLEX-ROWS
+   ========================================================================== */
+.health-log-container {
+    display: block;
+    margin-top: 15px;
+}
+.health-row {
+    display: flex;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(128,128,128,0.15);
+    font-size: 14px;
+}
+.health-row .col-num {
+    width: 55px;
+    text-align: center;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+.health-row .col-txt {
+    flex-grow: 1;
+    padding: 0 12px;
+    text-align: left;
+    line-height: 1.4;
+}
+.health-row .col-status {
+    width: 45px;
+    text-align: center;
+    flex-shrink: 0;
+    font-size: 16px;
+}
+.health-row .status-ok {
+    color: #188038;
+    font-weight: bold;
+}
+.health-warn {
+    color: #d93025;
+}
+.health-row .col-warn-icon {
+    width: 55px;
+    text-align: center;
+    flex-shrink: 0;
+    font-size: 16px;
+}
+.health-row .col-warn-txt {
+    flex-grow: 1;
+    padding: 0 12px;
+    text-align: left;
+    line-height: 1.4;
+}
+
+/* Dark Mode Fixes */
+.dark .health-row .status-ok {
+    color: #81c995;
+}
+.dark .health-warn {
+    color: #f28b82;
 }
