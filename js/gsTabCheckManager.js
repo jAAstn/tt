@@ -317,13 +317,11 @@ let suspendInfo = {};
     resolve(discarded ? gsUtils.STATUS_DISCARDED : gsUtils.STATUS_SUSPENDED);
   }
 
+// Verschoben nach gsUtils.resuspendSuspendedTab(), damit health.js
+  // ebenfalls darauf zugreifen kann. Lokaler Wrapper bleibt aus
+  // Kompatibilitätsgründen (interne Aufrufe in dieser Datei) bestehen.
   async function resuspendSuspendedTab(tab) {
-    gsUtils.log(tab.id, QUEUE_ID, 'Resuspending unresponsive suspended tab.');
-    if (await gsChrome.contextGetByTabId(tab.id)) {
-      await tgs.setTabStatePropForTabId( tab.id, tgs.STATE_DISABLE_UNSUSPEND_ON_RELOAD, true );
-    }
-    const reloadOk = await gsChrome.tabsReload(tab.id);
-    return reloadOk;
+    return gsUtils.resuspendSuspendedTab(tab);
   }
 
   // function ensureSuspendedTabVisible(tabView) {

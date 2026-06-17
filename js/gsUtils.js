@@ -851,4 +851,19 @@ async discardTabSafely(tabId) {
         gsUtils.warning(tabId, 'Discard failed or was redundant:', e.message);
     }
   },
+ 
+  /**
+   * @param   { chrome.tabs.Tab } tab
+   * @returns { Promise<boolean> }
+   * Reicht aus dem bisherigen gsTabCheckManager-internen Helfer rüber,
+   * damit health.js (und ggf. andere Module) ihn über gsUtils aufrufen können.
+   */
+  async resuspendSuspendedTab(tab) {
+    gsUtils.log(tab.id, 'Resuspending unresponsive suspended tab.');
+    if (await gsChrome.contextGetByTabId(tab.id)) {
+      await tgs.setTabStatePropForTabId( tab.id, tgs.STATE_DISABLE_UNSUSPEND_ON_RELOAD, true );
+    }
+    const reloadOk = await gsChrome.tabsReload(tab.id);
+    return reloadOk;
+  },
 };

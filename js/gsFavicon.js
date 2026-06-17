@@ -359,8 +359,10 @@ async function getFaviconMeta(tab) {
     });
   }
 
-  return {
+return {
     getFaviconMeta,
     getChromeFavIconUrl,
+    isFaviconMetaValid,
+    buildFaviconMeta,
   };
 })();
