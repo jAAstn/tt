@@ -74,20 +74,52 @@ export const gsFavicon = (() => {
     icon_url.searchParams.set('size', '32');
     return icon_url.toString();
   }
+  
+  // --- NEUE PRÜFFUNKTION ---
+  // Überprüft, ob ein übergebenes Custom-Icon wirklich funktioniert oder blockiert wird.
+  async function resolveValidTabIcon(favIconUrl) {
+    if (!favIconUrl || favIconUrl.startsWith('blob:') || favIconUrl === chrome.runtime.getURL('img/ic_suspendy_16x16.png')) {
+      return null;
+    }
 
-  async function getFaviconMetaForUrl(url, tabFavIconUrl, fRecursion = false) {
+    const customMeta = await buildFaviconMetaFromTab(favIconUrl);
+    if (!customMeta) return null;
+
+    // Wenn dein Script direkt einen Base64 data: String injiziert, ist es absolut sicher.
+    if (favIconUrl.startsWith('data:')) {
+      return customMeta;
+    }
+
+    // Wenn das Icon eine URL ist und das Canvas es erfolgreich verarbeiten konnte (kein CORS Block),
+    // ändert sich die interne URL in einen Base64-String. 
+    // Ist die URL immer noch gleich, wurde das Bild blockiert -> Fehler!
+    if (customMeta.normalisedDataUrl !== favIconUrl) {
+      return customMeta;
+    }
+
+    return null; // Das Icon wurde blockiert. Werfe es weg!
+  }
+
+async function getFaviconMetaForUrl(url, tabFavIconUrl, fRecursion = false) {
+    
+    // 1. Prüfe, ob das live injizierte Tab-Icon gültig ist (für Userscripts)
+    if (tabFavIconUrl) {
+      const validMeta = await resolveValidTabIcon(tabFavIconUrl);
+      if (validMeta) return validMeta;
+    }
+
+    // 2. Regulären Cache prüfen
     let faviconMeta = await getFaviconMetaFromCache(url);
     if (faviconMeta) return faviconMeta;
 
+    // 3. Chromium API als robuster Standard für blockierte Seiten (Cloudflare etc.)
     faviconMeta = await buildFaviconMetaFromChrome(url);
     if (faviconMeta) {
       await saveFaviconMetaToCache(url, faviconMeta);
       return faviconMeta;
     }
 
-    faviconMeta = await buildFaviconMetaFromTab(tabFavIconUrl);
-    if (faviconMeta) return faviconMeta;
-
+    // 4. Rekursion auf Host-URL
     const fullUrl = new URL(url).toString();
     const hostUrl = gsUtils.getRootUrlNew(fullUrl);
     if (!fRecursion && fullUrl != hostUrl) {
@@ -99,7 +131,7 @@ export const gsFavicon = (() => {
     }
   }
 
-  async function getFaviconMeta(tab) {
+async function getFaviconMeta(tab) {
     let originalUrl = tab.url ?? '';
     const tabFavIconUrl = tab.favIconUrl ?? '';
 
@@ -110,34 +142,40 @@ export const gsFavicon = (() => {
     if (gsUtils.isSuspendedTab(tab)) {
       originalUrl = gsUtils.getOriginalUrl(tab.url);
       
-      // --- CUSTOM LOGIC START ---
       try {
-        // Wir versuchen, das beim Suspenden gespeicherte Icon aus der DB zu holen.
         const suspendedInfo = await gsIndexedDb.fetchTabInfo(originalUrl);
         
+        // --- HIER WAR DER FEHLER ---
+        // Wir haben das Datenbank-Icon blind vertraut. Jetzt prüfen wir es erst!
         if (suspendedInfo && suspendedInfo.favIconUrl) {
-          gsUtils.log('gsFavicon', 'Found custom favicon URL in DB', suspendedInfo.favIconUrl);
-          
-          // Wir versuchen aus dieser URL ein Meta-Objekt zu bauen.
-          // buildFaviconMeta wurde unten angepasst, sodass es nicht mehr blockiert,
-          // wenn das Bild nicht bearbeitet werden kann (CORS/Timeout).
-          const customFaviconMeta = await buildFaviconMetaFromTab(suspendedInfo.favIconUrl);
-          
-          if (customFaviconMeta) {
-             // WICHTIG: Kein globales Caching, damit es Tab-spezifisch bleibt.
-             return customFaviconMeta;
+          const validDbMeta = await resolveValidTabIcon(suspendedInfo.favIconUrl);
+          if (validDbMeta) {
+            return validDbMeta;
           }
         }
       } catch (e) {
         gsUtils.warning('gsFavicon', 'Failed to fetch custom favicon from DB', e);
       }
-      // --- CUSTOM LOGIC END ---
     }
 
     const faviconMeta = await getFaviconMetaForUrl(originalUrl, tabFavIconUrl);
     if (faviconMeta) {
       return faviconMeta;
     }
+
+    // LÖSUNG C: GOOGLE S2 FALLBACK
+    try {
+      const urlObj = new URL(originalUrl);
+      if (urlObj.protocol.startsWith('http')) {
+        const googleFallbackUrl = `https://www.google.com/s2/favicons?sz=32&domain=${urlObj.hostname}`;
+        return {
+          favIconUrl: googleFallbackUrl,
+          isDark: false,
+          normalisedDataUrl: googleFallbackUrl,
+          transparentDataUrl: googleFallbackUrl,
+        };
+      }
+    } catch (e) { }
 
     return _defaultChromeFaviconMeta;
   }
@@ -150,7 +188,7 @@ export const gsFavicon = (() => {
     } catch (error) {}
   }
 
-async function buildFaviconMetaFromTab(favIconUrl) {
+  async function buildFaviconMetaFromTab(favIconUrl) {
     if (favIconUrl && !favIconUrl.startsWith('blob:') && favIconUrl !== chrome.runtime.getURL('img/ic_suspendy_16x16.png')) {
       try {
         const faviconMeta = await buildFaviconMeta(favIconUrl);
@@ -179,8 +217,6 @@ async function buildFaviconMetaFromTab(favIconUrl) {
   async function isFaviconMetaValid(faviconMeta) {
     if (!faviconMeta || faviconMeta.normalisedDataUrl === 'data:,' ) return false;
     
-    // Für Custom Icons überspringen wir die Fingerprint Prüfung oft, 
-    // aber für Cache-Checks lassen wir sie drin.
     if (!Object.keys(_defaultFaviconFingerprintById).length) {
       await getFaviconDefaults();
     }
@@ -216,20 +252,24 @@ async function buildFaviconMetaFromTab(favIconUrl) {
 
   // --- HIER IST DER WICHTIGE FIX ---
   function buildFaviconMeta(url) {
-    // Timeout drastisch reduziert, damit du nicht ewig den Spinner siehst
     const timeout = 500; 
 
     return new Promise((resolve, reject) => {
       const img = new Image();
-      img.crossOrigin = 'Anonymous';
+      
+      // FIX: Chrome-interne URLs schlagen mit 'Anonymous' wegen fehlender CORS-Header fehl!
+      // Wenn das Bild von unserer Extension (/_favicon/) kommt, dürfen wir KEIN crossOrigin anfordern.
+      if (!url.startsWith('chrome-extension://') && !url.startsWith('chrome://')) {
+        img.crossOrigin = 'Anonymous';
+      }
+      
       let isSettled = false;
 
-// Hilfsfunktion: Wenn Canvas fehlschlägt, nimm einfach die Original-URL!
+      // Hilfsfunktion: Wenn Canvas fehlschlägt, nimm einfach die Original-URL!
       const fallbackResolve = () => {
         if (isSettled) return;
         isSettled = true;
         
-        // Blob-URLs nicht als Fallback verwenden – sie können ablaufen
         if (url.startsWith('blob:')) {
           resolve(null);
           return;
@@ -238,8 +278,8 @@ async function buildFaviconMetaFromTab(favIconUrl) {
         resolve({
           favIconUrl: url,
           isDark: false,
-          normalisedDataUrl: url,  // Rohdaten
-          transparentDataUrl: url, // Rohdaten
+          normalisedDataUrl: url,
+          transparentDataUrl: url,
         });
       };
 
@@ -256,7 +296,6 @@ async function buildFaviconMetaFromTab(favIconUrl) {
 
           context.drawImage(img, 0, 0);
 
-          // Versuch die Bilddaten zu lesen (das schlägt bei Script-Icons oft fehl wegen CORS)
           let imageData;
           try {
             imageData = context.getImageData(0, 0, canvas.width, canvas.height);
@@ -266,8 +305,6 @@ async function buildFaviconMetaFromTab(favIconUrl) {
             return;
           }
 
-          // Wenn wir hier sind, durften wir das Bild bearbeiten.
-          // Wir machen es jetzt transparent/grau wie üblich.
           const origDataArray = imageData.data;
           const normalisedDataArray = new Uint8ClampedArray(origDataArray);
           const transparentDataArray = new Uint8ClampedArray(origDataArray);
@@ -278,7 +315,6 @@ async function buildFaviconMetaFromTab(favIconUrl) {
           }
 
           if (maxAlpha === 0) {
-            // Bild ist unsichtbar -> Fallback
             fallbackResolve();
             return;
           }
@@ -301,7 +337,7 @@ async function buildFaviconMetaFromTab(favIconUrl) {
           isSettled = true;
           resolve({
             favIconUrl: url,
-            isDark: false, // Vereinfachung
+            isDark: false,
             normalisedDataUrl,
             transparentDataUrl,
           });
@@ -311,14 +347,12 @@ async function buildFaviconMetaFromTab(favIconUrl) {
         }
       };
 
-      // Wenn Fehler beim Laden (z.B. Blob existiert nicht mehr): Fallback!
       img.onerror = () => {
         fallbackResolve();
       };
 
       img.src = url;
 
-      // Wenn es zu lange dauert: Fallback!
       setTimeout(() => {
         fallbackResolve();
       }, timeout);

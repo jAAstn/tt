@@ -346,23 +346,41 @@ export const gsTabSuspendManager = (function() {
     });
   }
 
-  async function saveSuspendData(tab) {
+async function saveSuspendData(tab) {
+    // --- FIX: Veraltete Tab-Daten aus der Queue ignorieren und live fetchen.
+    // Das ist entscheidend für Userscripts, die Titel oder Favicons dynamisch ändern!
+    let freshTab = tab;
+    try {
+      freshTab = await new Promise(resolve => {
+        chrome.tabs.get(tab.id, (result) => {
+          if (chrome.runtime.lastError) resolve(tab);
+          else resolve(result || tab);
+        });
+      });
+    } catch (e) {
+      freshTab = tab;
+    }
+
+    let safeFavIconUrl = freshTab.favIconUrl;
+    
+    // VERHINDERUNG VON DEFEKTEN ICONS & PERFORMANCE-ISSUES:
+    if (safeFavIconUrl && safeFavIconUrl.startsWith('blob:')) {
+      safeFavIconUrl = ''; 
+    }
+    if (safeFavIconUrl && safeFavIconUrl.startsWith('data:') && safeFavIconUrl.length > 500000) {
+      safeFavIconUrl = '';
+    }
+
     const tabProperties = {
       date: new Date(),
-      title: tab.title,
-      url: tab.url,
-      favIconUrl: tab.favIconUrl,
-      pinned: tab.pinned,
-      index: tab.index,
-      windowId: tab.windowId,
+      title: freshTab.title || tab.title,   // Übernimmt nun auch Script-Titel!
+      url: freshTab.url || tab.url,
+      favIconUrl: safeFavIconUrl,
+      pinned: freshTab.pinned !== undefined ? freshTab.pinned : tab.pinned,
+      index: freshTab.index !== undefined ? freshTab.index : tab.index,
+      windowId: freshTab.windowId || tab.windowId,
     };
     await gsIndexedDb.addSuspendedTabInfo(tabProperties);
-
-    // gsFavicon can't be loaded here since there's no DOM access yet
-    // const faviconMeta = await gsFavicon.buildFaviconMetaFromChrome( tab.url );
-    // if (faviconMeta) {
-    //   await gsFavicon.saveFaviconMetaToCache(tab.url, faviconMeta);
-    // }
   }
 
   async function requestGeneratePreviewImage(tab) {
