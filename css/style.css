@@ -248,6 +248,20 @@ ul.unorderedList li {
 .italic {
     font-style: italic;
 }
+/* FÜGE DAS HIER EIN - Ausserhalb aller Dark-Mode Media-Queries */
+.log {
+    display: grid !important;
+    grid-template-columns: 60px max-content 40px 1fr;
+    grid-column-gap: 15px;
+    grid-row-gap: 8px;
+    align-items: center;
+    margin-top: 15px;
+}
+
+.log .span-3 {
+    grid-column: span 3;
+    color: #d93025;
+}
 
 .mainContent {
     width: 750px;

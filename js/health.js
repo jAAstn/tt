@@ -21,11 +21,20 @@ import  { gsSession }             from './gsSession.js';
     return document.getElementById(id) ?? document.createElement('div');
   }
 
-  /**
+/**
    * @param {string} name
    */
   function logClear(name) {
-    quickElemById(name).innerHTML = '';
+    const el = quickElemById(name);
+    el.innerHTML = '';
+    
+    // Grid-Layout direkt per JS erzwingen (umgeht alle CSS-Cache-Probleme)
+    el.style.display = 'grid';
+    el.style.gridTemplateColumns = '60px auto 40px 1fr';
+    el.style.rowGap = '8px';
+    el.style.columnGap = '15px';
+    el.style.alignItems = 'center';
+    el.style.marginTop = '15px';
   }
 
   /**
@@ -35,7 +44,9 @@ import  { gsSession }             from './gsSession.js';
    * @param {string} [status]
    */
   function log(name, num, txt, status = '') {
-    quickElemById(name).innerHTML += `<div class="center">${num}</div><div>${txt}</div><div>${status}</div><div></div>`;
+    // Styling für bessere Lesbarkeit: Zahlen fett, Haken (✓) in Grün
+    const statusStyle = status.includes('✓') ? 'color: #188038; font-weight: bold;' : '';
+    quickElemById(name).innerHTML += `<div class="center" style="font-weight: 600;">${num}</div><div>${txt}</div><div class="center" style="${statusStyle}">${status}</div><div></div>`;
   }
 
   /**
@@ -43,8 +54,8 @@ import  { gsSession }             from './gsSession.js';
    * @param {string} txt
    */
   function warn(name, txt) {
-    // log(name, '&#9888;', txt, status);
-    quickElemById(name).innerHTML += `<div class="center">&#9888;</div><div class="span-3">${txt}</div>`;
+    // Warnungen rot hervorheben und über die restlichen 3 Spalten strecken
+    quickElemById(name).innerHTML += `<div class="center" style="color: #d93025; font-size: 1.2em;">&#9888;</div><div style="grid-column: span 3; color: #d93025;">${txt}</div>`;
   }
 
   function reset() {
