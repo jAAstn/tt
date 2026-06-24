@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Download Ordner Ersteller MV3",
+  "version": "2.2",
+  "description": "Automatically organizes downloaded images from selected domains.",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "downloads",
+    "downloads.shelf",
+    "downloads.ui",
+    "storage"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icons/128.png"
+  },
+  "icons": {
+    "128": "icons/128.png"
+  }
+}
