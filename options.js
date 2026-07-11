@@ -2231,15 +2231,36 @@ async function captureSavedSession(scope) {
   const allWindows = await chrome.windows.getAll({ populate: true });
   const sessionWindows = [];
   for (const win of allWindows) {
-    const filteredTabs = (win.tabs || []).filter((t) => !isBlockedSavedSessionUrl(t.url));
-    if (filteredTabs.length === 0) continue;
-    sessionWindows.push({
-      tabs: filteredTabs.map((t) => ({
-        url: t.url,
-        title: t.title || t.url || '',
+    const savedTabs = [];
+    for (const t of (win.tabs || [])) {
+      // Skip tabs without a URL (e.g. transient new-tab pages) early.
+      // parseSuspendedTab's own try/catch would swallow the resulting
+      // TypeError noisily, but skipping here is cleaner and faster.
+      if (!t.url || typeof t.url !== 'string') continue;
+      // Detect OUR OWN suspended.html placeholder so we capture the real
+      // URL+title instead of the placeholder. chrome.windows.getAll({populate:true})
+      // returns discarded tabs with their URL preserved, so this transparently
+      // covers both suspended-but-not-discarded and suspended+discarded tabs.
+      // We carry a `wasSuspended` bit so reopening can land the tab back as a
+      // suspended tab (avoids racing the auto-suspend timer on the freshly
+      // opened real URL).
+      const suspendedInfo = parseSuspendedTab(t.url);
+      const wasSuspended = Boolean(suspendedInfo);
+      const effectiveUrl = wasSuspended ? suspendedInfo.url : t.url;
+      const effectiveTitle = wasSuspended
+        ? (suspendedInfo.title || suspendedInfo.url || '')
+        : (t.title || t.url || '');
+      // Filter against the REAL underlying URL -- never against the placeholder.
+      if (isBlockedSavedSessionUrl(effectiveUrl)) continue;
+      savedTabs.push({
+        url: effectiveUrl,
+        title: effectiveTitle,
         pinned: Boolean(t.pinned),
-      })),
-    });
+        wasSuspended,
+      });
+    }
+    if (savedTabs.length === 0) continue;
+    sessionWindows.push({ tabs: savedTabs });
     if (scope === 'currentWindow' && win.focused) break;
   }
   return sessionWindows;
@@ -2503,7 +2524,13 @@ function collectOpenWindowPayload(sessionWindow, options) {
   const pinned = [];
   for (const t of (sessionWindow && sessionWindow.tabs) || []) {
     if (isBlockedSavedSessionUrl(t.url)) continue;
-    if (suspendOnOpen) {
+    // Per-tab suspended bit wins over the global #importAsSuspended checkbox,
+    // so a tab that was suspended at capture time reopens as suspended even
+    // if the user has the import-as-suspended toggle off. Saves the browser
+    // from having to start rendering the real page just to immediately
+    // auto-suspend it again.
+    const openAsSuspended = suspendOnOpen || Boolean(t.wasSuspended);
+    if (openAsSuspended) {
       urls.push(
         suspendedBase +
           '?uri=' + encodeURIComponent(t.url) +
@@ -2545,11 +2572,23 @@ function parsedSessionToSavedWindows(parsed) {
     const rawTabs = (w && Array.isArray(w.tabs)) ? w.tabs : [];
     for (const t of rawTabs) {
       if (!t || typeof t.url !== 'string') continue;
-      if (isBlockedSavedSessionUrl(t.url)) continue;
+      // Skip entries without a real string URL (defensive). parseSuspendedTab's
+      // own try/catch would otherwise swallow the resulting TypeError noisily.
+      if (!t.url || typeof t.url !== 'string') continue;
+      // If the imported JSON contains OUR OWN suspended.html placeholder, peel it
+      // off and record the real URL+title so reopening works correctly. Any
+      // caller-provided `wasSuspended` flag is preserved too.
+      const suspendedInfo = parseSuspendedTab(t.url);
+      const wasSuspended = Boolean(suspendedInfo) || Boolean(t.wasSuspended);
+      const effectiveUrl = suspendedInfo ? suspendedInfo.url : t.url;
+      if (isBlockedSavedSessionUrl(effectiveUrl)) continue;
       tabs.push({
-        url: t.url,
-        title: typeof t.title === 'string' ? t.title : '',
-        pinned: Boolean(t.pinned)
+        url: effectiveUrl,
+        title: typeof t.title === 'string'
+          ? t.title
+          : (suspendedInfo ? (suspendedInfo.title || '') : ''),
+        pinned: Boolean(t.pinned),
+        wasSuspended,
       });
     }
     if (tabs.length) out.push({ tabs });
@@ -2632,7 +2671,16 @@ async function openSavedSession(id, { scope, windowIndex, tabIndex } = {}) {
     if (isBlockedSavedSessionUrl(tab.url)) return 0;
     const current = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
     const wId = current && current[0] ? current[0].windowId : undefined;
-    await chrome.tabs.create({ url: tab.url, active: false, windowId: wId });
+    // Per-tab suspended bit wins over the global #importAsSuspended checkbox.
+    const openAsSuspended = suspendOnOpen || Boolean(tab.wasSuspended);
+    let tabUrl = tab.url;
+    if (openAsSuspended) {
+      const suspendedBase = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL
+        ? chrome.runtime.getURL('suspended.html')
+        : 'suspended.html';
+      tabUrl = suspendedBase + '?uri=' + encodeURIComponent(tab.url) + '&ttl=' + encodeURIComponent(tab.title || '');
+    }
+    await chrome.tabs.create({ url: tabUrl, active: false, windowId: wId });
     showNotice(getMessage('sessionOpenedSingleTab') || 'Tab opened', 'success', 2000);
     return 1;
   }

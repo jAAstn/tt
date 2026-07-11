@@ -247,6 +247,165 @@ describe('session & tab parsing', () => {
   });
 });
 
+describe('saved sessions (suspended/discarded tab handling)', () => {
+  // Helper that builds an extension-prefixed suspended.html URL
+  // exactly like the real extension produces.
+  function suspendedUrl(originalUrl, title) {
+    return `chrome-extension://${EXT_ID}/suspended.html?uri=${encodeURIComponent(originalUrl)}&ttl=${encodeURIComponent(title)}`;
+  }
+
+  test('captureSavedSession extracts real URL+title from our own placeholder and flags wasSuspended', async () => {
+    const { options, chrome } = load();
+    chrome.runtime.getURL.mockImplementation((p) => `chrome-extension://${EXT_ID}/${p}`);
+    chrome._setWindows([
+      { id: 1, focused: true },
+      { id: 2, focused: false },
+    ]);
+    chrome._setTabs([
+      // Suspended, not discarded.
+      { id: 10, windowId: 1, url: suspendedUrl('https://a.com', 'A'), title: 'A placeholder title', pinned: false, discarded: false },
+      // Suspended AND discarded by Chrome.
+      { id: 11, windowId: 1, url: suspendedUrl('https://b.com', 'B'), title: 'B placeholder title', pinned: true, discarded: true },
+      // Real URL on a different window.
+      { id: 12, windowId: 2, url: 'https://c.com', title: 'C real title', pinned: false, discarded: false },
+    ]);
+
+    const wins = await options.captureSavedSession('allWindows');
+    expect(wins).toHaveLength(2);
+
+    const win1 = wins.find((w) => w.tabs.some((t) => t.url === 'https://a.com' || t.url === 'https://b.com'));
+    const win2 = wins.find((w) => w.tabs.some((t) => t.url === 'https://c.com'));
+    expect(win1.tabs).toHaveLength(2);
+    expect(win2.tabs).toHaveLength(1);
+
+    const a = win1.tabs.find((t) => t.url === 'https://a.com');
+    const b = win1.tabs.find((t) => t.url === 'https://b.com');
+    const c = win2.tabs[0];
+
+    // Suspended tabs have their REAL underlying URL stored, with the
+    // `wasSuspended` flag and the original title from the placeholder.
+    expect(a).toMatchObject({ url: 'https://a.com', title: 'A', wasSuspended: true, pinned: false });
+    expect(b).toMatchObject({ url: 'https://b.com', title: 'B', wasSuspended: true, pinned: true });
+    // DiscarDed state is preserved by Chrome but we should NOT surface a
+    // placeholder URL + `wasSuspended: true` for the chrome-extension scheme.
+    // The capture flow uniformly calls our own tabs "suspended" because the
+    // URL is the placeholder, regardless of CPU-throttle state.
+    expect(c).toMatchObject({ url: 'https://c.com', title: 'C real title', wasSuspended: false, pinned: false });
+  });
+
+  test('captureSavedSession does not crash on tabs with no URL (defensive guard)', async () => {
+    const { options, chrome } = load();
+    chrome.runtime.getURL.mockImplementation((p) => `chrome-extension://${EXT_ID}/${p}`);
+    chrome._setWindows([{ id: 1, focused: true }]);
+    chrome._setTabs([
+      { id: 40, windowId: 1, url: null, title: 'no url' },
+      { id: 41, windowId: 1, url: undefined, title: 'undef url' },
+      { id: 42, windowId: 1, url: 'https://ok.com', title: 'ok' },
+    ]);
+    // Should not throw.
+    const wins = await options.captureSavedSession('allWindows');
+    expect(wins).toHaveLength(1);
+    expect(wins[0].tabs).toHaveLength(1);
+    expect(wins[0].tabs[0]).toMatchObject({ url: 'https://ok.com' });
+  });
+
+  test('captureSavedSession filters blocked schemes (chrome://, edge://, ...) even via placeholder', async () => {
+    const { options, chrome } = load();
+    chrome.runtime.getURL.mockImplementation((p) => `chrome-extension://${EXT_ID}/${p}`);
+    chrome._setWindows([{ id: 1, focused: true }]);
+    chrome._setTabs([
+      // A suspended tab whose original URL happened to be a chrome:// page
+      // (this shouldnt happen in practice because ZeroRAM never suspends
+      // internal pages, but defense in depth: it MUST still be skipped).
+      { id: 20, windowId: 1, url: suspendedUrl('chrome://settings', 'Settings'), title: 'p', pinned: false },
+      { id: 21, windowId: 1, url: 'chrome://newtab', title: 't', pinned: false },
+      { id: 22, windowId: 1, url: 'https://ok.com', title: 'o', pinned: false },
+    ]);
+    const wins = await options.captureSavedSession('allWindows');
+    expect(wins).toHaveLength(1);
+    expect(wins[0].tabs).toHaveLength(1);
+    expect(wins[0].tabs[0]).toMatchObject({ url: 'https://ok.com' });
+  });
+
+  test('captureSavedSession with scope=currentWindow only saves the focused window', async () => {
+    const { options, chrome } = load();
+    chrome.runtime.getURL.mockImplementation((p) => `chrome-extension://${EXT_ID}/${p}`);
+    chrome._setWindows([
+      { id: 1, focused: true },
+      { id: 2, focused: false },
+    ]);
+    chrome._setTabs([
+      { id: 30, windowId: 1, url: suspendedUrl('https://a.com', 'A'), title: 'A', pinned: false },
+      { id: 31, windowId: 2, url: suspendedUrl('https://b.com', 'B'), title: 'B', pinned: false },
+    ]);
+    const wins = await options.captureSavedSession('currentWindow');
+    expect(wins).toHaveLength(1);
+    expect(wins[0].tabs).toHaveLength(1);
+    expect(wins[0].tabs[0]).toMatchObject({ url: 'https://a.com', wasSuspended: true });
+  });
+
+  test('collectOpenWindowPayload routes wasSuspended tabs through suspended.html even when global toggle is off', () => {
+    const { options, chrome } = load();
+    chrome.runtime.getURL.mockImplementation((p) => `chrome-extension://${EXT_ID}/${p}`);
+    const sessionWindow = {
+      tabs: [
+        { url: 'https://a.com', title: 'A', pinned: false, wasSuspended: true },
+        { url: 'https://b.com', title: 'B', pinned: true, wasSuspended: false },
+      ],
+    };
+    const { urls, pinned } = options.collectOpenWindowPayload(sessionWindow, { suspendOnOpen: false });
+    // First tab is a re-suspend because wasSuspended is true.
+    expect(urls[0]).toContain('suspended.html');
+    expect(urls[0]).toContain(encodeURIComponent('https://a.com'));
+    expect(urls[0]).toContain(encodeURIComponent('A'));
+    // Second tab opens directly.
+    expect(urls[1]).toBe('https://b.com');
+    expect(pinned).toEqual([false, true]);
+  });
+
+  test('collectOpenWindowPayload respects suspendOnOpen=true for tabs without wasSuspended flag', () => {
+    const { options, chrome } = load();
+    chrome.runtime.getURL.mockImplementation((p) => `chrome-extension://${EXT_ID}/${p}`);
+    const sessionWindow = {
+      tabs: [{ url: 'https://a.com', title: 'A', pinned: false }], // legacy entry w/o wasSuspended
+    };
+    const { urls } = options.collectOpenWindowPayload(sessionWindow, { suspendOnOpen: true });
+    expect(urls[0]).toContain('suspended.html');
+    expect(urls[0]).toContain(encodeURIComponent('https://a.com'));
+  });
+
+  test('collectOpenWindowPayload keeps legacy entries (no wasSuspended) as direct URLs when toggle off', () => {
+    const { options, chrome } = load();
+    chrome.runtime.getURL.mockImplementation((p) => `chrome-extension://${EXT_ID}/${p}`);
+    const sessionWindow = {
+      tabs: [{ url: 'https://a.com', title: 'A', pinned: false }], // no wasSuspended -> old shape
+    };
+    const { urls } = options.collectOpenWindowPayload(sessionWindow, { suspendOnOpen: false });
+    expect(urls[0]).toBe('https://a.com');
+  });
+
+  test('parsedSessionToSavedWindows peels placeholder URLs and preserves wasSuspended', () => {
+    const { options, chrome } = load();
+    chrome.runtime.getURL.mockImplementation((p) => `chrome-extension://${EXT_ID}/${p}`);
+    const parsed = {
+      windows: [
+        {
+          tabs: [
+            { url: suspendedUrl('https://a.com', 'A'), title: 'A' },
+            { url: 'https://b.com', title: 'B', wasSuspended: true }, // legacy explicit flag
+            { url: 'chrome://blocked', title: 'should be skipped' },
+          ],
+        },
+      ],
+    };
+    const wins = options.parsedSessionToSavedWindows(parsed);
+    expect(wins).toHaveLength(1);
+    expect(wins[0].tabs).toHaveLength(2);
+    expect(wins[0].tabs[0]).toMatchObject({ url: 'https://a.com', title: 'A', wasSuspended: true });
+    expect(wins[0].tabs[1]).toMatchObject({ url: 'https://b.com', title: 'B', wasSuspended: true });
+  });
+});
+
 describe('tab viewer view-model', () => {
   test('shouldIncludeTabInView respects each filter mode', () => {
     const { options } = load();
