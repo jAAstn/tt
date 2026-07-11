@@ -805,5 +805,89 @@
   },
   "suspendBatchConcurrencyHelp": {
     "message": "How many tabs to suspend in parallel when performing bulk operations (like 'Suspend Others' or 'Suspend All'). Higher values are faster but consume more CPU/memory temporarily."
+  },
+  "savedSessionsCardTitle": {
+    "message": "Saved Sessions"
+  },
+  "savedSessionsCardDesc": {
+    "message": "Save your current browsing state inside the extension and reopen named sessions later — fully, by window, or by single tab. No files to manage."
+  },
+  "sessionNameLabel": {
+    "message": "Session name (optional):"
+  },
+  "sessionNamePlaceholder": {
+    "message": "e.g. Research morning"
+  },
+  "savedSessionsNameHelp": {
+    "message": "Leave empty to use an automatic timestamped name."
+  },
+  "saveCurrentWindow": {
+    "message": "Save Current Window"
+  },
+  "saveAllWindows": {
+    "message": "Save All Windows"
+  },
+  "savedSessionsListTitle": {
+    "message": "Your saved sessions"
+  },
+  "noSavedSessions": {
+    "message": "No saved sessions yet. Use the buttons above to save your current window or all windows."
+  },
+  "openAll": {
+    "message": "Open All"
+  },
+  "openWindow": {
+    "message": "Open Window"
+  },
+  "openTab": {
+    "message": "Open Tab"
+  },
+  "rename": {
+    "message": "Rename"
+  },
+  "delete": {
+    "message": "Delete"
+  },
+  "confirmDeleteSession": {
+    "message": "Delete saved session \"%s\"? This cannot be undone."
+  },
+  "savingSession": {
+    "message": "Saving session..."
+  },
+  "sessionSavedNotice": {
+    "message": "Session \"%s\" saved (%d window%s, %d tab%s)"
+  },
+  "saveSessionFailed": {
+    "message": "Failed to save session: %s"
+  },
+  "noTabsToSave": {
+    "message": "No valid tabs to save"
+  },
+  "savedSessionsLimitReached": {
+    "message": "Saved sessions limit reached (max %d)"
+  },
+  "sessionRenamed": {
+    "message": "Session renamed"
+  },
+  "renameSessionPrompt": {
+    "message": "Rename session \"%s\":"
+  },
+  "renameSessionEmpty": {
+    "message": "Session name cannot be empty"
+  },
+  "sessionDeleted": {
+    "message": "Session deleted"
+  },
+  "sessionOpenedNotice": {
+    "message": "Opened %d tab(s)"
+  },
+  "sessionOpenedSingleTab": {
+    "message": "Tab opened"
+  },
+  "sessionNotFound": {
+    "message": "Saved session not found"
+  },
+  "windows": {
+    "message": "windows"
   }
 }

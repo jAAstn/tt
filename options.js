@@ -1719,17 +1719,30 @@ function resetSessionPreviews() {
   if (exportPreview) {
     exportPreview.style.display = 'none';
   }
-  
+
   // Reset import preview
   const sessionPreview = document.getElementById('sessionPreview');
   if (sessionPreview) {
     sessionPreview.style.display = 'none';
   }
-  
+
   // Reset file input
   const sessionFileInput = document.getElementById('sessionFileInput');
   if (sessionFileInput) {
     sessionFileInput.value = '';
+  }
+
+  // Reset the Saved Sessions name input. We intentionally do NOT re-pull the
+  // saved-sessions list here: re-render on initSavedSessions() already keeps
+  // it in sync with storage, and doing it on every section toggle would
+  // lose any in-progress selection state the user hasn't acted on yet.
+  const savedSessionName = document.getElementById('savedSessionName');
+  if (savedSessionName) {
+    savedSessionName.value = '';
+  }
+  const importAsSuspended = document.getElementById('importAsSuspended');
+  if (importAsSuspended && typeof importAsSuspended.checked === 'boolean') {
+    importAsSuspended.checked = true; // reset to default
   }
 }
 
@@ -1759,6 +1772,12 @@ function initSessionManagement() {
 
   if (previewSessionBtn) {
     previewSessionBtn.addEventListener('click', previewSession);
+  }
+
+  // The new "Saved Sessions" card lives in this section too; its DOM is
+  // already in the page by the time DOMContentLoaded fires (init runs then).
+  if (typeof initSavedSessions === 'function') {
+    initSavedSessions();
   }
 }
 
@@ -2151,6 +2170,407 @@ function updateImportProgress(completed, total) {
     progressFill.style.width = `${percentage}%`;
   }
 }
+
+/* ---------- Saved Sessions Functions ---------- */
+// Persistent, in-extension session storage: the user can keep multiple
+// named sessions in `chrome.storage.local` (key: `utsSavedSessions`) and reopen
+// them later — fully, per-window, or per-tab — without round-tripping a file.
+//
+//   Storage shape (single array; insertion order preserved):
+//     utsSavedSessions: [
+//       { id, name, createdAt, updatedAt,
+//         windows: [{ tabs: [{ url, title, pinned }] }] }, ...
+//     ]
+//
+//   Open scopes:
+//     - 'all'    → recreate every captured window with `windows.create`
+//     - 'window' → recreate one chosen window's tabs in a fresh window
+//     - 'tab'    → open a single tab from the session in the current window
+//
+//   Pinned state: chrome.windows.create({ url: [...] }) does NOT preserve
+//   `pinned`. We mirror that quirk by re-applying pinned flags via
+//   chrome.tabs.update(id, { pinned: true }) on the new tabs after creation.
+//
+//   Skip rules: chrome://, chrome-extension:// (including our own
+//   suspended.html placeholder), edge://, about: are NEVER captured or
+//   reopened. The extension's own suspended.html URL is computed at
+//   initSavedSessions() time and pushed into SAVED_SESSIONS_BLOCKED_URLS.
+const SAVED_SESSIONS_KEY = 'utsSavedSessions';
+const MAX_SAVED_SESSIONS = 50;
+const SAVED_SESSIONS_BLOCKED_PREFIXES = ['chrome://', 'chrome-extension://', 'edge://', 'about:'];
+const SAVED_SESSIONS_BLOCKED_URLS = []; // populated by initSavedSessions
+let savedSessionsInitialized = false;
+
+function isBlockedSavedSessionUrl(url) {
+  if (!url || typeof url !== 'string') return true;
+  if (SAVED_SESSIONS_BLOCKED_URLS.some((prefix) => url.startsWith(prefix))) return true;
+  if (SAVED_SESSIONS_BLOCKED_PREFIXES.some((prefix) => url.startsWith(prefix))) return true;
+  return false;
+}
+
+// Build a new session shape from the live browser. `scope` is one of
+// 'currentWindow' (only the focused window) or 'allWindows' (every window
+// whose remaining-after-filter tab list is non-empty).
+async function captureSavedSession(scope) {
+  const allWindows = await chrome.windows.getAll({ populate: true });
+  const sessionWindows = [];
+  for (const win of allWindows) {
+    const filteredTabs = (win.tabs || []).filter((t) => !isBlockedSavedSessionUrl(t.url));
+    if (filteredTabs.length === 0) continue;
+    sessionWindows.push({
+      tabs: filteredTabs.map((t) => ({
+        url: t.url,
+        title: t.title || t.url || '',
+        pinned: Boolean(t.pinned),
+      })),
+    });
+    if (scope === 'currentWindow' && win.focused) break;
+  }
+  return sessionWindows;
+}
+
+function generateSavedSessionId() {
+  return `ses_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function defaultSavedSessionName() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `Session ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+async function loadSavedSessions() {
+  const result = await chrome.storage.local.get(SAVED_SESSIONS_KEY);
+  const arr = result && result[SAVED_SESSIONS_KEY];
+  return Array.isArray(arr) ? arr : [];
+}
+
+async function writeSavedSessions(sessions) {
+  await chrome.storage.local.set({ [SAVED_SESSIONS_KEY]: sessions });
+}
+
+async function saveSavedSession(scope) {
+  const nameEl = document.getElementById('savedSessionName');
+  const typed = nameEl && nameEl.value ? nameEl.value.trim() : '';
+  const name = typed || defaultSavedSessionName();
+
+  showNotice(getMessage('savingSession') || 'Saving session...', 'info', 1000);
+
+  try {
+    const windows = await captureSavedSession(scope);
+    if (windows.length === 0) {
+      showNotice(getMessage('noTabsToSave') || 'No valid tabs to save', 'warning', 4000);
+      return;
+    }
+    const existing = await loadSavedSessions();
+    if (existing.length >= MAX_SAVED_SESSIONS) {
+      const msg = (getMessage('savedSessionsLimitReached') || 'Saved sessions limit reached (max %d)').replace('%d', MAX_SAVED_SESSIONS);
+      showNotice(msg, 'error', 5000);
+      return;
+    }
+    const session = {
+      id: generateSavedSessionId(),
+      name,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      captureScope: scope,
+      windows,
+    };
+    await writeSavedSessions([session, ...existing]);
+    if (nameEl) nameEl.value = '';
+    const savedMsg = (getMessage('sessionSavedNotice') || 'Session "%s" saved (%d window%s, %d tab%s)')
+      .replace('%s', name)
+      .replace('%d', windows.length)
+      .replace('%s', windows.length === 1 ? '' : 's')
+      .replace('%d', windows.reduce((sum, w) => sum + w.tabs.length, 0))
+      .replace('%s', (windows.reduce((sum, w) => sum + w.tabs.length, 0)) === 1 ? '' : 's');
+    showNotice(savedMsg, 'success', 3000);
+    await refreshSavedSessionList();
+  } catch (err) {
+    console.error('[ZeroRAM Suspender] Failed to save session:', err);
+    showNotice((getMessage('saveSessionFailed') || 'Failed to save session: %s').replace('%s', err.message), 'error', 4000);
+  }
+}
+
+async function refreshSavedSessionList() {
+  const container = document.getElementById('savedSessionsList');
+  if (!container) return;
+  const sessions = await loadSavedSessions();
+  renderSavedSessionList(container, sessions);
+}
+
+function renderSavedSessionList(container, sessions) {
+  container.innerHTML = '';
+  if (!sessions || sessions.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'saved-session-empty';
+    empty.textContent = getMessage('noSavedSessions') || 'No saved sessions yet. Use the buttons above to save your current window or all windows.';
+    container.appendChild(empty);
+    return;
+  }
+  for (const session of sessions) {
+    container.appendChild(buildSavedSessionItem(session));
+  }
+}
+
+function buildSavedSessionItem(session) {
+  const item = document.createElement('div');
+  item.className = 'saved-session-item';
+  item.dataset.sessionId = session.id;
+
+  const fmtDate = (ts) => {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const totalTabs = (session.windows || []).reduce((sum, w) => sum + ((w.tabs || []).length), 0);
+  const winCount = (session.windows || []).length;
+  const winLabel = winCount === 1 ? (getMessage('window') || 'window') : (getMessage('windows') || 'windows');
+  const tabLabel = totalTabs === 1 ? (getMessage('tab') || 'tab') : (getMessage('tabs') || 'tabs');
+
+  const meta = document.createElement('div');
+  meta.className = 'saved-session-meta';
+
+  const nameRow = document.createElement('div');
+  nameRow.className = 'saved-session-name-row';
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'saved-session-name';
+  nameSpan.textContent = session.name || '';
+  const renameBtn = document.createElement('button');
+  renameBtn.className = 'btn btn-secondary saved-session-action-btn';
+  renameBtn.dataset.action = 'rename';
+  renameBtn.textContent = getMessage('rename') || 'Rename';
+  nameRow.append(nameSpan, renameBtn);
+
+  const stats = document.createElement('div');
+  stats.className = 'saved-session-stats';
+  stats.textContent = `${fmtDate(session.createdAt)} \u00b7 ${winCount} ${winLabel} \u00b7 ${totalTabs} ${tabLabel}`;
+
+  const winList = document.createElement('div');
+  winList.className = 'saved-session-window-list';
+  (session.windows || []).forEach((w, idx) => {
+    const row = document.createElement('div');
+    row.className = 'saved-session-window-row';
+
+    const label = document.createElement('span');
+    label.className = 'saved-session-window-label';
+    const wLabel = (getMessage('window') || 'Window');
+    label.textContent = `${wLabel} ${idx + 1} (${(w.tabs || []).length})`;
+    row.appendChild(label);
+
+    const openBtn = document.createElement('button');
+    openBtn.className = 'btn btn-info saved-session-action-btn';
+    openBtn.dataset.action = 'openWindow';
+    openBtn.dataset.windowIndex = String(idx);
+    openBtn.textContent = getMessage('openWindow') || 'Open Window';
+    row.appendChild(openBtn);
+
+    // Per-window single-tab opener. Empty placeholder option means “no tab
+    // selected” so the user can re-pick the same tab after opening it.
+    const select = document.createElement('select');
+    select.className = 'saved-session-tab-select';
+    select.dataset.windowIndex = String(idx);
+    select.style.marginLeft = '8px';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = `\u2014 ${(getMessage('openTab') || 'Open Tab')} \u2014`;
+    select.appendChild(placeholder);
+    (w.tabs || []).forEach((t, tIdx) => {
+      const opt = document.createElement('option');
+      opt.value = String(tIdx);
+      const labelText = (t.title || t.url || '').slice(0, 80);
+      opt.textContent = `${tIdx + 1}. ${labelText}`;
+      opt.title = t.url || '';
+      select.appendChild(opt);
+    });
+    row.appendChild(select);
+    winList.appendChild(row);
+  });
+
+  meta.append(nameRow, stats, winList);
+
+  const actions = document.createElement('div');
+  actions.className = 'saved-session-actions';
+  const openAllBtn = document.createElement('button');
+  openAllBtn.className = 'btn btn-primary saved-session-action-btn';
+  openAllBtn.dataset.action = 'openAll';
+  openAllBtn.textContent = getMessage('openAll') || 'Open All';
+  const deleteBtn = document.createElement('button');
+  deleteBtn.className = 'btn btn-danger saved-session-action-btn';
+  deleteBtn.dataset.action = 'delete';
+  deleteBtn.textContent = getMessage('delete') || 'Delete';
+  actions.append(openAllBtn, deleteBtn);
+
+  item.append(meta, actions);
+  return item;
+}
+
+async function handleSavedSessionListClick(event) {
+  const action = event.target.closest('[data-action]');
+  if (!action) return;
+  const item = action.closest('.saved-session-item');
+  if (!item) return;
+  event.preventDefault();
+
+  const id = item.dataset.sessionId;
+  const kind = action.dataset.action;
+
+  if (kind === 'openAll') {
+    await openSavedSession(id, { scope: 'all' });
+  } else if (kind === 'openWindow') {
+    const idx = parseInt(action.dataset.windowIndex, 10);
+    await openSavedSession(id, { scope: 'window', windowIndex: idx });
+  } else if (kind === 'rename') {
+    await promptRenameSavedSession(id);
+  } else if (kind === 'delete') {
+    const confirmed = window.confirm(
+      (getMessage('confirmDeleteSession') || 'Delete saved session "%s"? This cannot be undone.')
+        .replace('%s', item.querySelector('.saved-session-name')?.textContent || '')
+    );
+    if (confirmed) {
+      await deleteSavedSession(id);
+    }
+  }
+}
+
+async function handleSavedSessionListChange(event) {
+  const select = event.target;
+  if (!select || !select.classList.contains('saved-session-tab-select')) return;
+  if (select.value === '') return;
+  const item = select.closest('.saved-session-item');
+  if (!item) return;
+  const id = item.dataset.sessionId;
+  const wIdx = parseInt(select.dataset.windowIndex, 10);
+  const tIdx = parseInt(select.value, 10);
+  select.value = '';
+  await openSavedSession(id, { scope: 'tab', windowIndex: wIdx, tabIndex: tIdx });
+}
+
+async function promptRenameSavedSession(id) {
+  const sessions = await loadSavedSessions();
+  const idx = sessions.findIndex((s) => s.id === id);
+  if (idx === -1) return;
+  const current = sessions[idx];
+  const newName = window.prompt(
+    (getMessage('renameSessionPrompt') || 'Rename session "%s":').replace('%s', current.name),
+    current.name
+  );
+  if (newName === null) return;
+  const trimmed = newName.trim();
+  if (!trimmed) {
+    showNotice(getMessage('renameSessionEmpty') || 'Session name cannot be empty', 'warning', 3000);
+    return;
+  }
+  sessions[idx] = { ...current, name: trimmed, updatedAt: Date.now() };
+  await writeSavedSessions(sessions);
+  showNotice(getMessage('sessionRenamed') || 'Session renamed', 'success', 2000);
+  await refreshSavedSessionList();
+}
+
+async function deleteSavedSession(id) {
+  const sessions = await loadSavedSessions();
+  await writeSavedSessions(sessions.filter((s) => s.id !== id));
+  showNotice(getMessage('sessionDeleted') || 'Session deleted', 'success', 2000);
+  await refreshSavedSessionList();
+}
+
+// Convert one captured session window into urls + pinned-index map for
+// chrome.windows.create. Filter out any blocked URLs that crept in.
+function collectOpenWindowPayload(sessionWindow) {
+  const urls = [];
+  const pinned = [];
+  for (const t of (sessionWindow && sessionWindow.tabs) || []) {
+    if (isBlockedSavedSessionUrl(t.url)) continue;
+    urls.push(t.url);
+    pinned.push(Boolean(t.pinned));
+  }
+  return { urls, pinned };
+}
+
+// Open a stored session at one of three granularities. Returns the number of
+// tabs that were successfully created so callers can message the user.
+async function openSavedSession(id, { scope, windowIndex, tabIndex } = {}) {
+  const sessions = await loadSavedSessions();
+  const session = sessions.find((s) => s.id === id);
+  if (!session) {
+    showNotice(getMessage('sessionNotFound') || 'Saved session not found', 'error', 3000);
+    return 0;
+  }
+
+  if (scope === 'tab') {
+    const win = session.windows[windowIndex];
+    const tab = win && win.tabs[tabIndex];
+    if (!tab) return 0;
+    if (isBlockedSavedSessionUrl(tab.url)) return 0;
+    const current = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+    const wId = current && current[0] ? current[0].windowId : undefined;
+    await chrome.tabs.create({ url: tab.url, active: false, windowId: wId });
+    showNotice(getMessage('sessionOpenedSingleTab') || 'Tab opened', 'success', 2000);
+    return 1;
+  }
+
+  const winsToOpen = scope === 'all'
+    ? session.windows
+    : [session.windows[windowIndex]].filter(Boolean);
+
+  let totalOpened = 0;
+  for (const win of winsToOpen) {
+    const { urls, pinned } = collectOpenWindowPayload(win);
+    if (urls.length === 0) continue;
+    const newWin = await chrome.windows.create({ url: urls, focused: false });
+    const created = newWin && Array.isArray(newWin.tabs) ? newWin.tabs : [];
+    for (let i = 0; i < pinned.length && i < created.length; i += 1) {
+      if (pinned[i]) {
+        try {
+          await chrome.tabs.update(created[i].id, { pinned: true });
+        } catch (_) {
+          // Pinning a single tab is non-critical; continue with the others.
+        }
+      }
+    }
+    totalOpened += urls.length;
+  }
+
+  if (totalOpened > 0) {
+    const msg = (getMessage('sessionOpenedNotice') || 'Opened %d tab(s)').replace('%d', totalOpened);
+    showNotice(msg, 'success', 3000);
+  }
+  return totalOpened;
+}
+
+function initSavedSessions() {
+  if (savedSessionsInitialized) return;
+  savedSessionsInitialized = true;
+
+  // Block our own suspended.html URL so an unsuspended tab whose state is
+  // currently a placeholder is not captured as the placeholder itself and
+  // not re-opened as a placeholder later. We only push once.
+  try {
+    const suspendedUrl = chrome.runtime.getURL('suspended.html');
+    if (suspendedUrl && !SAVED_SESSIONS_BLOCKED_URLS.includes(suspendedUrl)) {
+      SAVED_SESSIONS_BLOCKED_URLS.push(suspendedUrl);
+    }
+  } catch (_) { /* chrome.* not available (test path) */ }
+
+  const saveCurrentBtn = document.getElementById('saveCurrentWindowBtn');
+  const saveAllBtn = document.getElementById('saveAllWindowsBtn');
+  const listEl = document.getElementById('savedSessionsList');
+
+  if (saveCurrentBtn) saveCurrentBtn.addEventListener('click', () => saveSavedSession('currentWindow'));
+  if (saveAllBtn) saveAllBtn.addEventListener('click', () => saveSavedSession('allWindows'));
+  if (listEl) {
+    listEl.addEventListener('click', handleSavedSessionListClick);
+    listEl.addEventListener('change', handleSavedSessionListChange);
+  }
+
+  // Always re-render on entry so deletions / renames done in another tab are
+  // visible immediately. Cheap: at most MAX_SAVED_SESSIONS rows.
+  refreshSavedSessionList();
+}
+
+/* ---------- End Saved Sessions Functions ---------- */
 
 /* ---------- End Session Management Functions ---------- */
 

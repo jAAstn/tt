@@ -137,6 +137,10 @@ function createChromeMock(initialState = {}) {
   const tabs = (initialState.tabs || []).map((t) => ({ ...t }));
   const windows = (initialState.windows || []).map((w) => ({ ...w }));
   let nextTabId = 1000;
+  // Window ids are picked from a separate counter so opening multiple windows
+  // during a "Saved Sessions" open flow (one per scope='all'/'window' action)
+  // never collides with tab ids or with existing test fixtures.
+  let nextWindowId = 100;
 
   const onChanged = makeEvent();
 
@@ -275,6 +279,40 @@ function createChromeMock(initialState = {}) {
       }),
       onFocusChanged: makeEvent(),
       onRemoved: makeEvent(),
+      // MV3 `windows.create({ url })` is used by the new Saved Sessions open
+      // flow (scope='all' / scope='window'). We mirror the real API:
+      //   - accept opts.url as a string OR an array
+      //   - return a window containing one tab per URL
+      //   - mirror the new tabs into the flat `tabs` list so subsequent
+      //     `tabs.update(id, { pinned: true })` calls (the post-create pinning
+      //     step) can find them by id.
+      create: jest.fn((opts = {}) => {
+        const wId = ++nextWindowId;
+        const urls = Array.isArray(opts.url)
+          ? opts.url.slice()
+          : (typeof opts.url === 'string' && opts.url.length > 0)
+            ? [opts.url]
+            : [];
+        const newTabs = urls.map((url, i) => ({
+          id: ++nextTabId,
+          windowId: wId,
+          index: i,
+          url,
+          active: i === 0 && opts.focused !== false,
+          pinned: false,
+        }));
+        const win = {
+          id: wId,
+          focused: opts.focused !== false,
+          type: opts.type || 'normal',
+          incognito: Boolean(opts.incognito),
+          state: opts.state || 'normal',
+          tabs: newTabs,
+        };
+        windows.push(win);
+        for (const t of newTabs) tabs.push(t);
+        return Promise.resolve(win);
+      }),
     },
 
     alarms: {
