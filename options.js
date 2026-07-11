@@ -1764,11 +1764,27 @@ function initSessionManagement() {
 
   if (sessionFileInput) {
     sessionFileInput.addEventListener('change', handleSessionFileSelected);
-  }
+  }    if (importSessionBtn) {
+      importSessionBtn.addEventListener('click', importSession);
+    }
+    const importSessionToSavedBtn = document.getElementById('importSessionToSavedBtn');
+    const sessionFileToSaved = document.getElementById('sessionFileToSaved');
+    if (importSessionToSavedBtn && sessionFileToSaved) {
+      sessionFileToSaved.addEventListener('change', async () => {
+        const f = sessionFileToSaved.files && sessionFileToSaved.files[0];
+        sessionFileToSaved.value = '';
+        if (!f) return;
+        try {
+          await importSessionToSavedSessions(f);
+        } catch (err) {
+          if (typeof console !== 'undefined' && console.error) console.error(err);
+        }
+      });
+      importSessionToSavedBtn.addEventListener('click', () => {
+        sessionFileToSaved.click();
+      });
+    }
 
-  if (importSessionBtn) {
-    importSessionBtn.addEventListener('click', importSession);
-  }
 
   if (previewSessionBtn) {
     previewSessionBtn.addEventListener('click', previewSession);
@@ -2478,20 +2494,130 @@ async function deleteSavedSession(id) {
 
 // Convert one captured session window into urls + pinned-index map for
 // chrome.windows.create. Filter out any blocked URLs that crept in.
-function collectOpenWindowPayload(sessionWindow) {
+function collectOpenWindowPayload(sessionWindow, options) {
+  const suspendOnOpen = !!(options && options.suspendOnOpen);
+  const suspendedBase = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL
+    ? chrome.runtime.getURL('suspended.html')
+    : 'suspended.html';
   const urls = [];
   const pinned = [];
   for (const t of (sessionWindow && sessionWindow.tabs) || []) {
     if (isBlockedSavedSessionUrl(t.url)) continue;
-    urls.push(t.url);
+    if (suspendOnOpen) {
+      urls.push(
+        suspendedBase +
+          '?uri=' + encodeURIComponent(t.url) +
+          '&ttl=' + encodeURIComponent(t.title || '')
+      );
+    } else {
+      urls.push(t.url);
+    }
     pinned.push(Boolean(t.pinned));
   }
   return { urls, pinned };
 }
 
+// ---------- saved-session import helpers (Import-to-Saved-Sessions button) ----------
+// Build a sensible default name when importing a JSON session file. Uses the
+// parsed session.name if present, otherwise the filename stripped of its
+// extension, otherwise 'Session'. The current date is appended so multiple
+// imports do not visually collide in the list.
+function saveSavedSessions_promptName(parsed, filename) {
+  const stamp = new Date().toLocaleString();
+  let base = '';
+  if (parsed && typeof parsed.name === 'string' && parsed.name.trim()) {
+    base = parsed.name.trim();
+  } else if (filename) {
+    base = String(filename).replace(/\.json$/i, '').replace(/[\\/]/g, '_');
+  }
+  base = base || 'Session';
+  return 'Imported ' + base + ' — ' + stamp;
+}
+
+// Convert parsed session JSON (from parseSessionFile) into the saved-sessions
+// store shape: { windows: [{ tabs: [{ url, title, pinned }] }] }.
+// Skip entries with missing URLs or blocked schemes. Drop empty windows.
+function parsedSessionToSavedWindows(parsed) {
+  const out = [];
+  const rawWindows = (parsed && Array.isArray(parsed.windows)) ? parsed.windows : [];
+  for (const w of rawWindows) {
+    const tabs = [];
+    const rawTabs = (w && Array.isArray(w.tabs)) ? w.tabs : [];
+    for (const t of rawTabs) {
+      if (!t || typeof t.url !== 'string') continue;
+      if (isBlockedSavedSessionUrl(t.url)) continue;
+      tabs.push({
+        url: t.url,
+        title: typeof t.title === 'string' ? t.title : '',
+        pinned: Boolean(t.pinned)
+      });
+    }
+    if (tabs.length) out.push({ tabs });
+  }
+  return out;
+}
+
+// Read a session JSON file (from an <input type=file>) and append it to the
+// saved-sessions store. Does NOT open any tabs — the user picks a scope later.
+async function importSessionToSavedSessions(file) {
+  if (!file) return;
+  const showMsg = (key, fallback, type, ttl) => {
+    if (typeof showNotice === 'function') {
+      const m = (typeof chrome !== 'undefined' && chrome.i18n)
+        ? (chrome.i18n.getMessage(key) || fallback)
+        : fallback;
+      showNotice(m, type, ttl);
+    }
+  };
+  showMsg('savingToSavedSessions', 'Saving to Saved Sessions…', 'info', 2000);
+  try {
+    const content = await file.text();
+    const parsed = parseSessionFile(content, file.name);
+    if (!parsed) {
+      showMsg('invalidSessionFile', 'Invalid session file', 'error', 4000);
+      return;
+    }
+    const windows = parsedSessionToSavedWindows(parsed);
+    if (!windows.length) {
+      showMsg('emptySessionImport', 'No openable tabs in session file', 'error', 4000);
+      return;
+    }
+    const list = await loadSavedSessions();
+    if (list.length >= MAX_SAVED_SESSIONS) {
+      showMsg('savedSessionLimitReached', 'Saved Sessions limit reached', 'error', 4000);
+      return;
+    }
+    const safeName = saveSavedSessions_promptName(parsed, file.name);
+    const newSession = {
+      id: generateSavedSessionId(),
+      name: safeName.length > 120 ? safeName.slice(0, 120) : safeName,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      windows: windows
+    };
+    list.push(newSession);
+    await writeSavedSessions(list);
+    await refreshSavedSessionList();
+    showMsg('importedToSavedSessions', 'Session imported to Saved Sessions', 'success', 3000);
+  } catch (err) {
+    if (typeof console !== 'undefined' && console.error) console.error('importSessionToSavedSessions', err);
+    showMsg('importFailed', 'Failed to import session', 'error', 4000);
+  }
+}
+
 // Open a stored session at one of three granularities. Returns the number of
 // tabs that were successfully created so callers can message the user.
 async function openSavedSession(id, { scope, windowIndex, tabIndex } = {}) {
+  // Honour the same #importAsSuspended checkbox that the classic Import flow
+  // already reads. When enabled, every opened tab points at our placeholder
+  // instead of the real URL, so tabs land pre-suspended and the browser does
+  // not have to start rendering every page at once.
+  const suspendOnOpen = (() => {
+    try {
+      const el = document.getElementById('importAsSuspended');
+      return !!(el && el.checked);
+    } catch (_) { return false; }
+  })();
   const sessions = await loadSavedSessions();
   const session = sessions.find((s) => s.id === id);
   if (!session) {
@@ -2517,7 +2643,7 @@ async function openSavedSession(id, { scope, windowIndex, tabIndex } = {}) {
 
   let totalOpened = 0;
   for (const win of winsToOpen) {
-    const { urls, pinned } = collectOpenWindowPayload(win);
+    const { urls, pinned } = collectOpenWindowPayload(win, { suspendOnOpen });
     if (urls.length === 0) continue;
     const newWin = await chrome.windows.create({ url: urls, focused: false });
     const created = newWin && Array.isArray(newWin.tabs) ? newWin.tabs : [];
@@ -3693,6 +3819,9 @@ if (typeof module !== 'undefined' && module.exports) {
     initSavedSessions,
     handleSavedSessionListClick,
     handleSavedSessionListChange,
+    saveSavedSessions_promptName,
+    parsedSessionToSavedWindows,
+    importSessionToSavedSessions,
     // settings flows
     exportSettings,
     previewSettings,

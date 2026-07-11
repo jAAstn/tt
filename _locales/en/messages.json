@@ -889,5 +889,23 @@
   },
   "windows": {
     "message": "windows"
+  },
+  "importToSavedSessions": {
+    "message": "Import to Saved Sessions"
+  },
+  "savingToSavedSessions": {
+    "message": "Saving to Saved Sessions…"
+  },
+  "importedToSavedSessions": {
+    "message": "Session imported to Saved Sessions"
+  },
+  "invalidSessionFile": {
+    "message": "Invalid session file"
+  },
+  "emptySessionImport": {
+    "message": "No openable tabs in session file"
+  },
+  "savedSessionLimitReached": {
+    "message": "Saved Sessions limit reached (50 entries). Delete one first."
   }
 }
