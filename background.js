@@ -608,7 +608,7 @@ let fixFaviconProcessor = {
 // tab's turn comes (each discard wait can take seconds at scale); the user may
 // have activated the tab, started audio, pinned it, or navigated in the
 // meantime. Returns the fresh tab when still eligible, or null to skip.
-async function revalidateTabForSuspend(tabId, settings) {
+async function revalidateTabForSuspend(tabId, settings, force = false) {
   let fresh;
   try {
     fresh = await chrome.tabs.get(tabId);
@@ -617,7 +617,8 @@ async function revalidateTabForSuspend(tabId, settings) {
   }
   if (isSuspendedTab(fresh)) return null;
   if (isTabUnsuspending(tabId)) return null;
-  if (isWhitelisted(fresh.url, settings)) return null; // also covers internal URLs
+  if (isInternalUrl(fresh.url)) return null; // internal pages always stay protected
+  if (!force && isWhitelisted(fresh.url, settings)) return null;
   if (settings.neverSuspendAudio && fresh.audible) return null;
   if (settings.neverSuspendPinned && fresh.pinned) return null;
   if (fresh.active) {
@@ -632,15 +633,24 @@ async function revalidateTabForSuspend(tabId, settings) {
   return fresh;
 }
 
-async function suspendTab(tab, settings, revalidate = false) {
+async function suspendTab(tab, settings, revalidate = false, force = false, skipReadyWait = false) {
   if (revalidate) {
-    const fresh = await revalidateTabForSuspend(tab.id, settings);
+    const fresh = await revalidateTabForSuspend(tab.id, settings, force);
     if (!fresh) return;
     tab = fresh;
   }
   if (isInternalUrl(tab.url)) return; // skip internal pages
 
   const shouldDiscard = settings.useNativeDiscard && !tab.active;
+  // Schnellpfad: User hat explizit suspendiert → nicht auf Favicon warten.
+  // Spart bis zu DISCARD_READY_TIMEOUT_MS (=10s) Renderer-Last pro Klick.
+  if (shouldDiscard && skipReadyWait) {
+    try {
+      await chrome.tabs.discard(tab.id);
+    } catch (_) {}
+    return;
+  }
+
   if (shouldDiscard) {
     beginSuspendedReadyWait(tab.id);
   }
@@ -969,6 +979,9 @@ for (const tab of tabs) {
 
     // NEU: Wenn die andere Extension den Tab entladen hat, zwinge ZeroRAM zur sofortigen Übernahme
     if (tab.discarded) {
+      // Wenn der Tab bereits unseren suspended-Placeholder hält, nichts tun —
+      // sonst Renderer-Wake-Up + Reload + Re-Discard pro Alarm-Tick.
+      if (tab.url && tab.url.startsWith(SUSPENDED_PREFIX)) continue;
       suspendTargets.push(tab);
       continue; // Überspringt die restliche Zeitberechnung für diesen Tab
     }
@@ -1431,7 +1444,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg.command === 'suspendTab') {
         const tab = await chrome.tabs.get(msg.tabId);
         const settings = await getSettings();
-        await suspendTab(tab, settings);
+        await suspendTab(tab, settings, false, false, true); // skipReadyWait
         respond({ done: true });
       } else if (msg.command === 'unsuspendTab') {
         // Start tracking this tab as being unsuspended
@@ -1681,7 +1694,7 @@ async function unsuspendTabWithUrl(tabId, originalUrl) {
 }
 
 // Suspend other tabs in the same window
-async function suspendOthersInWindow(currentTabId) {
+async function suspendOthersInWindow(currentTabId, force = false) {
   const currentTab = await chrome.tabs.get(currentTabId);
   // Get all tabs in the window, including discarded ones
   const tabs = await chrome.tabs.query({ windowId: currentTab.windowId });
@@ -1697,7 +1710,8 @@ async function suspendOthersInWindow(currentTabId) {
       // Check suspension prevention settings
       if (settings.neverSuspendAudio && tab.audible) continue;
       if (settings.neverSuspendPinned && tab.pinned) continue;
-      if (!isWhitelisted(tab.url, settings)) {
+      // Force-suspend ignores the whitelist (normal + temp), but internal URLs stay protected above
+      if (force || !isWhitelisted(tab.url, settings)) {
         targets.push(tab);
       }
     }
@@ -1707,12 +1721,12 @@ async function suspendOthersInWindow(currentTabId) {
   const concurrency = settings.suspendBatchConcurrency || 5;
   for (let i = 0; i < targets.length; i += concurrency) {
     const batch = targets.slice(i, i + concurrency);
-    await Promise.allSettled(batch.map(tab => suspendTab(tab, settings, true)));
+    await Promise.allSettled(batch.map(tab => suspendTab(tab, settings, true, force, true)));
   }
 }
 
 // Suspend other tabs in all windows
-async function suspendOthersInAllWindows(currentTabId, withProgress = false) {
+async function suspendOthersInAllWindows(currentTabId, withProgress = false, force = false) {
   // Get all tabs, including discarded ones
   const allTabs = await chrome.tabs.query({});
   const settings = await getSettings();
@@ -1741,7 +1755,8 @@ async function suspendOthersInAllWindows(currentTabId, withProgress = false) {
     if (isSuspendedTab(tab)) continue;
     if (settings.neverSuspendAudio && tab.audible) continue;
     if (settings.neverSuspendPinned && tab.pinned) continue;
-    if (isWhitelisted(tab.url, settings)) continue;
+    // Force-suspend ignores the whitelist (normal + temp); internal URLs are already filtered above
+    if (!force && isWhitelisted(tab.url, settings)) continue;
 
     if (settings.rememberLastActiveTab && tab.id === lastActiveTabId && !focusedWindow) continue;
     if (tab.active) {
@@ -1762,7 +1777,7 @@ async function suspendOthersInAllWindows(currentTabId, withProgress = false) {
     if (cancelToken.cancelled) break;
     const batch = targets.slice(i, i + concurrency);
     await Promise.allSettled(batch.map(tab =>
-      suspendTab(tab, settings, true).finally(() => {
+      suspendTab(tab, settings, true, force).finally(() => {
         processed += 1;
         if (withProgress) postBulkProgress({ action: 'suspendAll', processed, total });
       })
@@ -1832,7 +1847,7 @@ async function suspendSelectedTabs(tabIds) {
   const concurrency = settings.suspendBatchConcurrency || 5;
   for (let i = 0; i < targets.length; i += concurrency) {
     const batch = targets.slice(i, i + concurrency);
-    await Promise.allSettled(batch.map(tab => suspendTab(tab, settings)));
+    await Promise.allSettled(batch.map(tab => suspendTab(tab, settings, false, false, true)));
   }
 }
 
@@ -1856,7 +1871,7 @@ async function toggleTabSuspension(tab) {
     // Suspend the tab
     const settings = await getSettings();
     if (tab && tab.url && !isInternalUrl(tab.url)) {
-      await suspendTab(tab, settings);
+      await suspendTab(tab, settings, false, false, true); // skipReadyWait
       return true;
     }
   }
@@ -1952,7 +1967,7 @@ chrome.commands.onCommand.addListener(async (command) => {
         const selectedTabsToSuspend = await chrome.tabs.query({ highlighted: true, currentWindow: true });
         for (const t of selectedTabsToSuspend) {
           if (!isSuspendedTab(t) && !isInternalUrl(t.url)) {
-            await suspendTab(t, settings);
+            await suspendTab(t, settings, false, false, true); // skipReadyWait
           }
         }
         break;
