@@ -1,0 +1,2106 @@
+// background.js - ZeroRAM Suspender service worker
+// Uses Manifest V3 service worker
+// Handles automatic suspension and user commands.
+
+// ==== Storage Keys ====
+const FAVICON_FIX_DEFAULT_BATCH_SIZE = 50;
+
+const DEFAULT_SETTINGS = {
+  autoSuspendMinutes: 30, // 0 = never
+  customSuspendTimes: [], // <-- NEU
+  useNativeDiscard: true, // true = chrome.tabs.discard, false = placeholder page
+  whitelist: [], // array of strings (exact url or domain)
+  neverSuspendAudio: true, // never suspend tabs playing audio
+  neverSuspendPinned: true, // never suspend pinned tabs
+  neverSuspendActive: false, // never suspend active tab in each window
+  rememberLastActiveTab: true, // remember last active tab when browser loses focus
+  clickAnywhereToUnsuspend: false, // allow clicking anywhere on the suspended page to unsuspend
+  // How a suspended tab is marked in the tab strip:
+  //   'favicon'     = render the site favicon 50% transparent (default)
+  //   'titlePrefix' = keep the favicon at full opacity, prefix the title with 💤
+  suspendedIndicatorMode: 'favicon',
+  // Favicon fix processor settings
+  fixFaviconEnabled: true, // enable suspended favicon fixing
+  fixFaviconBatchSize: FAVICON_FIX_DEFAULT_BATCH_SIZE, // 0 = unlimited per checkTabs batch
+  fixFaviconMaxRetries: 5, // max attempts per tab to avoid infinite reloads
+  suspendBatchConcurrency: 5, // batch concurrency limit for bulk operations
+};
+
+const STORAGE_KEY = 'utsSettings';
+// ==== Icon Management ====
+const ICON_DEFAULT = {
+  "16": "img/ic_suspendy_16x16.png",
+  "32": "img/ic_suspendy_32x32.png",
+  "48": "img/ic_suspendy_48x48.png",
+  "128": "img/ic_suspendy_128x128.png"
+}; //
+
+const ICON_GRAY = {
+  "16": "img/ic_suspendy_16x16_grey.png",
+  "32": "img/ic_suspendy_32x32_grey.png"
+}; //[cite: 3]
+
+async function updateTabIcon(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const settings = await getSettingsCached();
+    let isImmune = false;
+    
+    // Prüfen, ob der Tab durch Whitelist, manuelles Pausieren (tempWhitelist) oder interne URLs geschützt ist[cite: 3]
+    if (isInternalUrl(tab.url) || isSuspendedTab(tab) || isWhitelisted(tab.url, settings)) {
+      isImmune = true; //[cite: 3]
+    } else if (settings.neverSuspendAudio && tab.audible) {
+      isImmune = true; //[cite: 3]
+    } else if (settings.neverSuspendPinned && tab.pinned) {
+      isImmune = true; //[cite: 3]
+    }
+
+    await chrome.action.setIcon({
+      tabId: tab.id,
+      path: isImmune ? ICON_GRAY : ICON_DEFAULT //[cite: 3]
+    });
+  } catch (e) {
+    // Tab existiert möglicherweise nicht mehr, Fehler ignorieren[cite: 3]
+  }
+}
+
+async function updateAllVisibleIcons() {
+  try {
+    const tabs = await chrome.tabs.query({ active: true }); //[cite: 3]
+    for (const tab of tabs) {
+      await updateTabIcon(tab.id); //[cite: 3]
+    }
+  } catch (e) {}
+}
+const TEMP_KEY = 'utsTempWhitelist';
+const LAST_ACTIVE_TAB_KEY = 'utsLastActiveTab';
+const LAST_FOCUSED_WINDOW_KEY = 'utsLastFocusedWindow';
+
+// Constant prefix for our suspended page URL to avoid repeated getURL calls
+const SUSPENDED_PREFIX = chrome.runtime.getURL('suspended.html');
+const DISCARD_READY_TIMEOUT_MS = 10000;
+// After suspended.js signals it set the favicon link, we poll tab.favIconUrl
+// to confirm Chrome's browser process actually registered a real favicon before
+// discarding. Verifying the captured favIconUrl — instead of blindly trusting a
+// single fixed delay — is what prevents discarding a tab before its icon lands,
+// which is what made Chrome fall back to the extension icon. After the bounded
+// number of attempts we mark ready anyway (best effort: the page likely has no
+// usable favicon, so waiting longer would not help).
+const FAVICON_CONFIRM_INTERVAL_MS = 200;
+const FAVICON_CONFIRM_MAX_ATTEMPTS = 15;
+// Chrome needs time to process the image internally after the favicon URL is
+// updated before the tab can be safely discarded.
+const FAVICON_CAPTURE_DELAY_MS = 200;
+const EXTENSION_DEFAULT_FAVICON_URLS = new Set(
+  getExtensionIconPaths().map(path => chrome.runtime.getURL(path))
+);
+
+// In-memory cache for temporary whitelist
+let tempWhitelist = new Set();
+
+// Map<tabId, lastSeenTimestamp> persisted across restarts
+let seenTimestamps = {};
+
+// Track tabs that are currently being unsuspended to prevent re-suspension.
+// Map<tabId, addedAtMs>: entries expire after a TTL so a failed unsuspend
+// navigation (offline, blocked scheme) cannot exempt a tab from
+// auto-suspension forever. Successful unsuspends are removed when the page
+// reaches status complete in onUpdated.
+let unsuspendingTabs = new Map();
+const UNSUSPENDING_TTL_MS = 5 * 60 * 1000;
+
+function markTabUnsuspending(tabId) {
+  unsuspendingTabs.set(tabId, Date.now());
+}
+
+// Lazy-expiring membership check.
+function isTabUnsuspending(tabId) {
+  const addedAt = unsuspendingTabs.get(tabId);
+  if (addedAt === undefined) return false;
+  if (Date.now() - addedAt > UNSUSPENDING_TTL_MS) {
+    unsuspendingTabs.delete(tabId);
+    return false;
+  }
+  return true;
+}
+
+// Track tabs that are being suspended and waiting for discard
+let pendingDiscardTabs = new Map(); // tabId -> pending favicon/page readiness state
+let suspendedFaviconReadyTabs = new Set(); // tab IDs whose suspended favicon is ready
+
+// Track last active tab for remembering when browser loses focus
+let lastActiveTabId = null;
+
+// Track last active tab per window to handle inactive tab timestamp updates
+let lastActiveTabPerWindow = new Map(); // windowId -> { tabId, timestamp }
+// Track focused window transitions so we can stamp the previous window's active tab
+let lastFocusedWindowId = chrome.windows.WINDOW_ID_NONE;
+
+// Track tabs with no favicon (normally caused by lazy loaded after browser restart)
+let fixFaviconTabs = new Set(); // tabId set for tabs with no favicon
+// Retry counts to prevent infinite attempts: Map<tabId, count>
+let fixFaviconRetryCounts = new Map();
+// Event-driven re-discard queue (avoids full inactive-tab scans on frequent events)
+let pendingReDiscardTabIds = new Set();
+let reDiscardRetryCounts = new Map(); // Map<tabId, count>
+
+// Alarm period (minutes)
+const ALARM_PERIOD_MINUTES = 1; // must be >=1 for chrome.alarms
+
+let running = false;
+
+// Cold-start initialization gate. Event handlers await initPromise (via the
+// initDone fast-path) before reading state restored from session storage
+// (seenTimestamps, lastActiveTabId, lastActiveTabPerWindow). Without the gate,
+// the very event that wakes the service worker races the async restore and
+// runs against empty maps — which is how a long-idle active tab could get
+// suspended right after the user switched away from it.
+let initDone = false;
+
+// Keep popup ports to stream bulk progress
+const popupPorts = new Set();
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'popup') {
+    popupPorts.add(port);
+    port.onDisconnect.addListener(() => popupPorts.delete(port));
+  }
+});
+
+function postBulkProgress(payload) {
+  // payload: { action, processed, total, done? }
+  try {
+    for (const p of popupPorts) {
+      p.postMessage({ type: 'bulkProgress', ...payload });
+    }
+  } catch (_) {}
+}
+
+// Bulk cancel control
+let bulkCancelToken = { cancelled: false };
+function newCancelToken() {
+  bulkCancelToken = { cancelled: false };
+  return bulkCancelToken;
+}
+function cancelBulkNow() {
+  bulkCancelToken.cancelled = true;
+  // Fast-resolve any waits for discard so current iteration can exit sooner
+  try {
+    for (const [tabId, pendingInfo] of pendingDiscardTabs) {
+      if (pendingInfo && typeof pendingInfo.resolve === 'function') {
+        pendingInfo.resolve();
+      }
+    }
+  } catch (_) {}
+}
+
+// Helper: load settings
+async function getSettings() {
+  const { [STORAGE_KEY]: saved } = await chrome.storage.sync.get(STORAGE_KEY);
+  return { ...DEFAULT_SETTINGS, ...(saved || {}) };
+}
+
+// Cached settings to reduce frequent storage reads
+let cachedSettings = null;
+let cachedAtMs = 0;
+const SETTINGS_CACHE_MS = 5000;
+// Compiled whitelist cache to avoid O(tabs * whitelist) string scans
+let compiledWhitelistSource = null; // points to settings.whitelist array reference
+let compiledWhitelistLooseUrlPrefixes = []; // url prefixes that fail host bucketing
+let compiledWhitelistUrlPrefixesByHost = new Map(); // hostname -> string[]
+let compiledWhitelistDomains = new Set();
+let compiledWhitelistRegexes = []; // <-- NEU: Array für RegEx
+
+async function getSettingsCached() {
+  const now = Date.now();
+  if (cachedSettings && (now - cachedAtMs) < SETTINGS_CACHE_MS) {
+    return cachedSettings;
+  }
+  cachedSettings = await getSettings();
+  cachedAtMs = now;
+  return cachedSettings;
+}
+
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area === 'sync' && changes[STORAGE_KEY]) {
+    cachedSettings = { ...DEFAULT_SETTINGS, ...(changes[STORAGE_KEY].newValue || {}) };
+    cachedAtMs = Date.now();
+    // Invalidate compiled whitelist cache when settings change.
+    compiledWhitelistSource = null;
+
+    // --- NEU: Wenn sich Whitelist- oder Audio-Einstellungen ändern, Icons aller aktiven Tabs sofort anpassen ---
+    try {
+      const activeTabs = await chrome.tabs.query({ active: true });
+      for (const t of activeTabs) {
+        await updateTabIcon(t.id, t);
+      }
+    } catch(e) {
+      console.warn('Failed to update icons on storage change:', e);
+    }
+  }
+});
+
+// Helper: save settings
+async function saveSettings(settings) {
+  await chrome.storage.sync.set({ [STORAGE_KEY]: settings });
+}
+
+function setTempWhitelistFromStorageValue(value) {
+  if (!Array.isArray(value)) {
+    tempWhitelist = new Set();
+    return;
+  }
+  const cleaned = value.filter(v => typeof v === 'string' && v.length > 0);
+  tempWhitelist = new Set(cleaned);
+}
+
+async function persistTempWhitelist() {
+  await chrome.storage.session.set({ [TEMP_KEY]: Array.from(tempWhitelist) });
+}
+
+// Helper: save last active tab ID
+async function saveLastActiveTab() {
+  await chrome.storage.session.set({ [LAST_ACTIVE_TAB_KEY]: lastActiveTabId });
+}
+
+// Helper: load last active tab ID
+async function loadLastActiveTab() {
+  const { [LAST_ACTIVE_TAB_KEY]: saved } = await chrome.storage.session.get(LAST_ACTIVE_TAB_KEY);
+  lastActiveTabId = saved || null;
+}
+
+const LAST_ACTIVE_PER_WINDOW_KEY = 'utsLastActiveTabPerWindow';
+
+// Persist lastActiveTabPerWindow to session storage and update in-memory map.
+function setLastActiveTabInWindow(windowId, data) {
+  lastActiveTabPerWindow.set(windowId, data);
+  chrome.storage.session.set({
+    [LAST_ACTIVE_PER_WINDOW_KEY]: Object.fromEntries(lastActiveTabPerWindow)
+  });
+}
+
+// Remove a window entry from lastActiveTabPerWindow and persist the change.
+function removeLastActiveTabInWindow(windowId) {
+  lastActiveTabPerWindow.delete(windowId);
+  chrome.storage.session.set({
+    [LAST_ACTIVE_PER_WINDOW_KEY]: Object.fromEntries(lastActiveTabPerWindow)
+  });
+}
+
+// Restore lastActiveTabPerWindow from session storage on cold start.
+async function loadLastActiveTabPerWindow() {
+  const { [LAST_ACTIVE_PER_WINDOW_KEY]: saved } =
+    await chrome.storage.session.get(LAST_ACTIVE_PER_WINDOW_KEY);
+  if (saved) {
+    lastActiveTabPerWindow = new Map(
+      Object.entries(saved).map(([k, v]) => [Number(k), v])
+    );
+  }
+}
+
+// Helper: internal URL check
+function isInternalUrl(url) {
+  return (
+    url.startsWith('chrome://') ||
+    url.startsWith('edge://') ||
+    // Note: about pages use a single colon with no slashes (about:blank).
+    url.startsWith('about:') ||
+    url.startsWith('view-source:') ||
+    url.startsWith('devtools://') ||
+    url.startsWith('chrome-extension://') ||
+    url.startsWith('extension://')
+  );
+}
+
+function isTabGoneError(error) {
+  const message = String((error && error.message) || error || '');
+  return message.includes('No tab with id') || message.includes('Invalid tab ID');
+}
+
+function logUnexpectedTabError(context, error) {
+  if (isTabGoneError(error)) return;
+  console.warn(`[ZeroRAM Suspender] ${context}:`, error);
+}
+
+function compileWhitelist(whitelist) {
+  compiledWhitelistLooseUrlPrefixes = [];
+  compiledWhitelistUrlPrefixesByHost = new Map();
+  compiledWhitelistDomains = new Set();
+  compiledWhitelistRegexes = []; // <-- NEU: Reset
+  compiledWhitelistSource = whitelist;
+
+  if (!Array.isArray(whitelist) || whitelist.length === 0) return;
+
+  for (const rawEntry of whitelist) {
+    if (typeof rawEntry !== 'string') continue;
+    const entry = rawEntry.trim();
+    if (!entry) continue;
+
+    // --- NEU: RegEx Check ---
+    if (entry.startsWith('/') && entry.endsWith('/') && entry.length > 2) {
+      try {
+        compiledWhitelistRegexes.push(new RegExp(entry.slice(1, -1)));
+        continue;
+      } catch (e) {
+        console.warn('Invalid regex in whitelist:', entry);
+        continue; // Wenn fehlerhaft, überspringen
+      }
+    }
+    // --- ENDE NEU ---
+
+    if (entry.startsWith('http')) {
+      // Keep exact prefix semantics for full URL entries.
+      // Bucket by hostname so matching does not scan all URL prefixes.
+      try {
+        const parsed = new URL(entry);
+        const host = (parsed.hostname || '').toLowerCase();
+        if (host) {
+          const arr = compiledWhitelistUrlPrefixesByHost.get(host);
+          if (arr) {
+            arr.push(entry);
+          } else {
+            compiledWhitelistUrlPrefixesByHost.set(host, [entry]);
+          }
+        } else {
+          compiledWhitelistLooseUrlPrefixes.push(entry);
+        }
+      } catch (_) {
+        // Keep behavior for non-standard but still string-prefix entries.
+        compiledWhitelistLooseUrlPrefixes.push(entry);
+      }
+    } else {
+      // Domain matcher uses normalized lowercase host segments.
+      compiledWhitelistDomains.add(entry.toLowerCase());
+    }
+  }
+}
+
+function ensureCompiledWhitelist(settings) {
+  const whitelist = Array.isArray(settings.whitelist) ? settings.whitelist : [];
+  if (compiledWhitelistSource !== whitelist) {
+    compileWhitelist(whitelist);
+  }
+}
+
+function isHostnameWhitelisted(hostname) {
+  if (!hostname || compiledWhitelistDomains.size === 0) return false;
+  let current = hostname.toLowerCase();
+  while (current) {
+    if (compiledWhitelistDomains.has(current)) return true;
+    const dot = current.indexOf('.');
+    if (dot === -1) break;
+    current = current.slice(dot + 1);
+  }
+  return false;
+}
+
+// Helper: whitelist check
+function isWhitelisted(url, settings) {
+  if (!url) return false;
+  if (isInternalUrl(url)) return true;
+  if (tempWhitelist.has(url)) return true;
+
+  ensureCompiledWhitelist(settings);
+
+  // --- NEU: Gegen RegEx prüfen ---
+  for (const regex of compiledWhitelistRegexes) {
+    if (regex.test(url)) return true;
+  }
+  // --- ENDE NEU ---
+
+  if (
+    compiledWhitelistDomains.size === 0 &&
+    compiledWhitelistUrlPrefixesByHost.size === 0
+  ) {
+    return false;
+  }
+
+  try {
+    const u = new URL(url);
+    const host = (u.hostname || '').toLowerCase();
+    const hostPrefixes = compiledWhitelistUrlPrefixesByHost.get(host);
+    if (hostPrefixes) {
+      for (const prefix of hostPrefixes) {
+        if (url.startsWith(prefix)) return true;
+      }
+    }
+    return isHostnameWhitelisted(u.hostname);
+  } catch (_) {
+    return false;
+  }
+}
+
+// Helper: is suspended tab
+function isSuspendedTab(tab) {
+  return tab && tab.url && tab.url.startsWith(SUSPENDED_PREFIX);
+}
+
+function getExtensionIconPaths() {
+  const manifest = chrome.runtime.getManifest();
+  const paths = new Set();
+  for (const iconSet of [manifest.icons, manifest.action && manifest.action.default_icon]) {
+    if (!iconSet || typeof iconSet !== 'object') continue;
+    for (const path of Object.values(iconSet)) {
+      if (typeof path === 'string' && path) {
+        paths.add(path);
+      }
+    }
+  }
+  return Array.from(paths);
+}
+
+function stripFaviconUrlSuffix(url) {
+  if (!url) return '';
+  const text = String(url);
+  const queryIndex = text.indexOf('?');
+  const hashIndex = text.indexOf('#');
+  let cutIndex = -1;
+  if (queryIndex !== -1) cutIndex = queryIndex;
+  if (hashIndex !== -1 && (cutIndex === -1 || hashIndex < cutIndex)) {
+    cutIndex = hashIndex;
+  }
+  return cutIndex === -1 ? text : text.slice(0, cutIndex);
+}
+
+function isExtensionDefaultFaviconUrl(favIconUrl) {
+  if (!favIconUrl) return false;
+  if (EXTENSION_DEFAULT_FAVICON_URLS.has(favIconUrl)) return true;
+  return EXTENSION_DEFAULT_FAVICON_URLS.has(stripFaviconUrlSuffix(favIconUrl));
+}
+
+function hasUsableSuspendedFavicon(tab) {
+  return Boolean(tab && tab.favIconUrl && !isExtensionDefaultFaviconUrl(tab.favIconUrl));
+}
+
+function needsSuspendedFaviconFix(tab) {
+  return Boolean(
+    tab &&
+    !tab.active &&
+    isSuspendedTab(tab) &&
+    (!tab.favIconUrl || isExtensionDefaultFaviconUrl(tab.favIconUrl))
+  );
+}
+
+// Helper: parse original url from suspended tab
+function parseOriginalUrlFromSuspended(suspendedUrl) {
+  try {
+    if (!suspendedUrl || !suspendedUrl.startsWith(SUSPENDED_PREFIX)) {
+      return null;
+    }
+    const urlObj = new URL(suspendedUrl);
+    return urlObj.searchParams.get('uri');
+  } catch (error) {
+    console.warn('[ZeroRAM Suspender] Failed to parse suspended URL:', error);
+    return null;
+  }
+}
+
+// Stamp a tab as recently seen; returns true when a valid tabId is written
+function markTabSeen(tabId, timestamp) {
+  if (typeof tabId !== 'number') return false;
+  seenTimestamps[tabId] = timestamp;
+  return true;
+}
+
+// Mark the active tab in a specific window as recently seen.
+// Uses cached per-window active tab first; falls back to one window-scoped query.
+async function markWindowActiveTabSeen(windowId, timestamp) {
+  if (typeof windowId !== 'number' || windowId === chrome.windows.WINDOW_ID_NONE) {
+    return false;
+  }
+
+  const tracked = lastActiveTabPerWindow.get(windowId);
+  if (tracked && markTabSeen(tracked.tabId, timestamp)) {
+    return true;
+  }
+
+  try {
+    const activeTabs = await chrome.tabs.query({ windowId, active: true });
+    if (activeTabs.length > 0 && typeof activeTabs[0].id === 'number') {
+      const activeTabId = activeTabs[0].id;
+      setLastActiveTabInWindow(windowId, { tabId: activeTabId, timestamp });
+      return markTabSeen(activeTabId, timestamp);
+    }
+  } catch (_) {
+    // Window may be gone between focus events; ignore.
+  }
+
+  return false;
+}
+
+// Background process for fixing tab favicon
+let fixFaviconProcessor = {
+  isRunning: false,
+  timeoutId: null,
+  
+  start() {
+    if (this.isRunning || fixFaviconTabs.size === 0) return;
+    this.isRunning = true;
+    this.processNext();
+  },
+  
+  stop() {
+    this.isRunning = false;
+    if (this.timeoutId) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
+    }
+  },
+  
+  async processNext() {
+    if (!this.isRunning || fixFaviconTabs.size === 0) {
+      this.isRunning = false;
+      return;
+    }
+    
+    // Get the first tab from the set
+    const tabId = fixFaviconTabs.values().next().value;
+    fixFaviconTabs.delete(tabId);
+    let attemptedReload = false;
+    
+    try {
+      const settings = await getSettingsCached();
+      if (!settings.fixFaviconEnabled) {
+        this.stop();
+        return;
+      }
+
+      const tab = await chrome.tabs.get(tabId);
+      
+      // Force reload tab first, then discard if needed
+      if (isSuspendedTab(tab)) {
+        // Check again if tab is still inactive 
+        // (user might have clicked on it during loading)
+        if (!tab.active) {
+          attemptedReload = true;
+          if (settings.useNativeDiscard) {
+            beginSuspendedReadyWait(tabId);
+          }
+          await chrome.tabs.reload(tabId);
+
+          if (settings.useNativeDiscard) {
+            await discardSuspendedTabWhenReady(tabId, 'Favicon fix discard');
+          }
+        }
+      }
+    } catch (error) {
+      if (attemptedReload) {
+        cancelPendingDiscardWait(tabId);
+      }
+      logUnexpectedTabError('Failed to fix tab favicon', error);
+    }
+    
+    if (attemptedReload && !suspendedFaviconReadyTabs.has(tabId)) {
+      const currentRetries = fixFaviconRetryCounts.get(tabId) || 0;
+      fixFaviconRetryCounts.set(tabId, currentRetries + 1);
+    }
+    
+    // Schedule next tab processing with 1 second delay
+    this.timeoutId = setTimeout(() => {
+      this.processNext();
+    }, 1000);
+  }
+};
+
+// === Suspension Logic ===
+// Re-fetch a tab and re-check dynamic protections right before suspending it.
+// Auto/bulk suspension decides on a snapshot that can be stale by the time a
+// tab's turn comes (each discard wait can take seconds at scale); the user may
+// have activated the tab, started audio, pinned it, or navigated in the
+// meantime. Returns the fresh tab when still eligible, or null to skip.
+async function revalidateTabForSuspend(tabId, settings) {
+  let fresh;
+  try {
+    fresh = await chrome.tabs.get(tabId);
+  } catch (_) {
+    return null; // tab is gone
+  }
+  if (isSuspendedTab(fresh)) return null;
+  if (isTabUnsuspending(tabId)) return null;
+  if (isWhitelisted(fresh.url, settings)) return null; // also covers internal URLs
+  if (settings.neverSuspendAudio && fresh.audible) return null;
+  if (settings.neverSuspendPinned && fresh.pinned) return null;
+  if (fresh.active) {
+    if (settings.neverSuspendActive) return null;
+    // The user is looking at it right now if its window is focused. Active
+    // tabs of unfocused windows stay eligible, matching checkTabs semantics.
+    try {
+      const win = await chrome.windows.get(fresh.windowId);
+      if (win && win.focused) return null;
+    } catch (_) {}
+  }
+  return fresh;
+}
+
+async function suspendTab(tab, settings, revalidate = false) {
+  if (revalidate) {
+    const fresh = await revalidateTabForSuspend(tab.id, settings);
+    if (!fresh) return;
+    tab = fresh;
+  }
+  if (isInternalUrl(tab.url)) return; // skip internal pages
+
+  const shouldDiscard = settings.useNativeDiscard && !tab.active;
+  if (shouldDiscard) {
+    beginSuspendedReadyWait(tab.id);
+  }
+
+  // Always switch to lightweight placeholder first
+  try {
+    await suspendWithPlaceholder(tab);
+  } catch (error) {
+    if (shouldDiscard) {
+      cancelPendingDiscardWait(tab.id);
+    }
+    throw error;
+  }
+
+  // If user enables native discard and tab is NOT active, discard after placeholder is loaded
+  if (shouldDiscard) {
+    await discardSuspendedTabWhenReady(tab.id, 'Discard after suspend');
+  }
+}
+
+// Wait for tab to finish loading the suspended.html page, then wait for
+// suspended.js to signal favicon readiness before discarding. This prevents the
+// browser process from freezing the renderer before it has registered
+// the favicon, which would cause the extension's default icon to show.
+function beginSuspendedReadyWait(tabId, resetReady = true) {
+  if (resetReady) {
+    suspendedFaviconReadyTabs.delete(tabId);
+  }
+
+  let pendingInfo = pendingDiscardTabs.get(tabId);
+  if (pendingInfo) {
+    clearTimeout(pendingInfo.timeoutId);
+    pendingInfo.pageComplete = false;
+    pendingInfo.faviconReady = false;
+    pendingInfo.timedOut = false;
+  } else {
+    pendingInfo = {
+      pageComplete: false,
+      faviconReady: false,
+      timedOut: false,
+      generation: 0,
+      timeoutId: null,
+      promise: null,
+      tryResolve() {
+        if (this.pageComplete && this.faviconReady) {
+          this.resolve({ timedOut: false });
+        }
+      },
+      resolve(result = { timedOut: false }) {
+        clearTimeout(this.timeoutId);
+        pendingDiscardTabs.delete(tabId);
+        this._resolve(result);
+      }
+    };
+    pendingInfo.promise = new Promise(resolve => {
+      pendingInfo._resolve = resolve;
+    });
+    pendingDiscardTabs.set(tabId, pendingInfo);
+  }
+
+  pendingInfo.generation += 1;
+  const generation = pendingInfo.generation;
+  pendingInfo.timeoutId = setTimeout(() => {
+    pendingInfo.timedOut = true;
+    pendingInfo.resolve({ timedOut: true });
+  }, DISCARD_READY_TIMEOUT_MS);
+
+  chrome.tabs.get(tabId).then(tab => {
+    const currentPendingInfo = pendingDiscardTabs.get(tabId);
+    if (
+      !currentPendingInfo ||
+      currentPendingInfo !== pendingInfo ||
+      currentPendingInfo.generation !== generation
+    ) {
+      return;
+    }
+    if (isSuspendedTab(tab) && tab.status === 'complete') {
+      currentPendingInfo.pageComplete = true;
+      if (suspendedFaviconReadyTabs.has(tabId) || hasUsableSuspendedFavicon(tab)) {
+        currentPendingInfo.faviconReady = true;
+        suspendedFaviconReadyTabs.add(tabId);
+      }
+      currentPendingInfo.tryResolve();
+    }
+  }).catch(() => {
+    const currentPendingInfo = pendingDiscardTabs.get(tabId);
+    if (
+      currentPendingInfo &&
+      currentPendingInfo === pendingInfo &&
+      currentPendingInfo.generation === generation
+    ) {
+      currentPendingInfo.resolve({ tabGone: true });
+    }
+  });
+
+  return pendingInfo.promise;
+}
+
+async function waitForTabLoaded(tabId, resetReady = false) {
+  const pendingInfo = pendingDiscardTabs.get(tabId);
+  return pendingInfo ? pendingInfo.promise : beginSuspendedReadyWait(tabId, resetReady);
+}
+
+function cancelPendingDiscardWait(tabId) {
+  const pendingInfo = pendingDiscardTabs.get(tabId);
+  if (pendingInfo) {
+    pendingInfo.resolve({ cancelled: true });
+  }
+}
+
+function markSuspendedFaviconReady(tabId) {
+  if (typeof tabId !== 'number') return;
+  suspendedFaviconReadyTabs.add(tabId);
+  fixFaviconRetryCounts.delete(tabId);
+  const pendingInfo = pendingDiscardTabs.get(tabId);
+  if (pendingInfo) {
+    pendingInfo.faviconReady = true;
+    setTimeout(() => {
+      // Re-fetch pendingInfo in case it was cancelled/recreated during the delay
+      const currentPendingInfo = pendingDiscardTabs.get(tabId);
+      if (currentPendingInfo && currentPendingInfo === pendingInfo) {
+        currentPendingInfo.tryResolve();
+      }
+    }, FAVICON_CAPTURE_DELAY_MS);
+  }
+}
+
+// suspended.js sends 'faviconReady' the instant it appends the <link rel="icon">,
+// but that only means the renderer set the DOM node — not that Chrome captured
+// the favicon into tab.favIconUrl (the value snapshotted on discard). Poll until
+// Chrome reports a real (non-default) favIconUrl, then mark ready. The onUpdated
+// favIconUrl listener usually wins this race; this is the fallback for cases
+// where that event does not arrive (e.g. data: URL favicon updates Chrome
+// coalesces, or a service-worker wake-up that missed the event).
+function confirmSuspendedFaviconReady(tabId, attempt = 0) {
+  if (typeof tabId !== 'number') return;
+  setTimeout(async () => {
+    if (suspendedFaviconReadyTabs.has(tabId)) return; // already confirmed elsewhere
+    let tab;
+    try {
+      tab = await chrome.tabs.get(tabId);
+    } catch (_) {
+      return; // tab gone
+    }
+    if (!isSuspendedTab(tab)) return; // navigated away; no longer our placeholder
+    if (hasUsableSuspendedFavicon(tab) || attempt + 1 >= FAVICON_CONFIRM_MAX_ATTEMPTS) {
+      markSuspendedFaviconReady(tabId);
+    } else {
+      confirmSuspendedFaviconReady(tabId, attempt + 1);
+    }
+  }, FAVICON_CONFIRM_INTERVAL_MS);
+}
+
+async function discardSuspendedTabWhenReady(tabId, context) {
+  try {
+    await waitForTabLoaded(tabId);
+    const currentTab = await chrome.tabs.get(tabId);
+    if (!isSuspendedTab(currentTab) || currentTab.active || currentTab.discarded) {
+      return false;
+    }
+    await chrome.tabs.discard(tabId);
+    return true;
+  } catch (error) {
+    logUnexpectedTabError(`${context} failed`, error);
+    return false;
+  }
+}
+
+// --- START CUSTOM FAVICON MAPS ---
+// const EPORNER_FAVICON_MAP = [
+  // { match: 'www.eporner.com/profile/', icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAclBMVEUAAQUAAgwAAxAABRsAByMACCYACzkAD0wAF2wAG4MAHYsAIqQAJK40Ub88PDxgYGBgYmp1dXV1idOoqKioqrGotOO/v7+/x+W/yOvP1vDQ0NDQ0dXQ1vDY2NjY2d7Y3fPf39/g4ODv7+/39/f6+vr///9PNI2MAAAAdElEQVQ4y2PgIQAYBpsCCVUwEOfGpUAeokCWhZACZjwKlISFhQXxKZBiZGdn58CngBmfL6iiQFlaRpKXh4A3BTgJKODH5wsVRUUFPrzeZGBlZeUa2HCgXIGSiKioEKGQlGMnO0VBE60YTgU8bExgwDbIsh4A9Z454jwX9RoAAAAASUVORK5CYII=' },
+  // { match: 'www.eporner.com/pornstar/', icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAAAAABWESUoAAAAd0lEQVQ4y2OwIgAYBpuCc//B4Iw5LgUPIQpu8BBSwIlHwfsVK1aU4lNwgUVSUlIFnwJOfL6gioLvl27fSrYi4M1kHQIKEvD54teDB/dt8HqTiZeXV39gw4FyBe9X79kzlVBI3pIkO0VBE+1+nAqshFnBQHiQZT0ABPs+0AnS0Y4AAAAASUVORK5CYII=' },
+  // { match: 'https://www.eporner.com/', icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAclBMVEUAAQUAAgwAAxAABRsAByMACCYACzkAD0wAF2wAG4MAHYsAIqQAJK40Ub88PDxgYGBgYmp1dXV1idOoqKioqrGotOO/v7+/x+W/yOvP1vDQ0NDQ0dXQ1vDY2NjY2d7Y3fPf39/g4ODv7+/39/f6+vr///9PNI2MAAAAdElEQVQ4y2PgIQAYBpsCCVUwEOfGpUAeokCWhZACZjwKlISFhQXxKZBiZGdn58CngBmfL6iiQFlaRpKXh4A3BTgJKODH5wsVRUUFPrzeZGBlZeUa2HCgXIGSiKioEKGQlGMnO0VBE60YTgU8bExgwDbIsh4A9Z454jwX9RoAAAAASUVORK5CYII=' }
+// ];
+
+const RULE34_FAVICON_MAP = [
+  { match: 'page=account&s=profile&uname=', icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEABAMAAACuXLVVAAAAElBMVEX///8AAAATExMgICBISEj///+FO3OXAAAAAXRSTlMBN+Ho8AAAAShJREFUeNrt3c0RgyAQBlBbsIW0kBbSgv23kotcNsPwM0xck/fdkAUfNwdG3bYzzy9niwEAAAAAAAC4DBA7jkr2kN4btcYDAAAAAAAA5AHUCktGIb0LAAAAAAAAAMgD2BvpBcQ6AAAAAAAAgPsCRjcaav0AAAAAAAAA9wHMHljM9pcAAAAAAAAA5AOMblAckwEAAAAAAAD4HcDsQQcAAAAAAABAPkAsHD2wqC0EAAAAAAAA4D6A1oZDbYJlLzwCAAAAAAAApAH0pvcDCK1xAAAAAAAAAHkAvZBS92gkzlcbBwAAAAAAAJAHUC68zpSBsb26DgAAAAAAACAfoDXh6joAAAAAAACAfABPRAAAAAAAAP8HKIkPELX2qrqPPzwCAAAAAAAAXAV4A8N+Sq06PvkiAAAAAElFTkSuQmCC' },
+  { match: 'page=account&s=profile&id=', icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEABAMAAACuXLVVAAAAElBMVEX///8AAAATExMgICBISEj///+FO3OXAAAAAXRSTlMBN+Ho8AAAAShJREFUeNrt3c0RgyAQBlBbsIW0kBbSgv23kotcNsPwM0xck/fdkAUfNwdG3bYzzy9niwEAAAAAAAC4DBA7jkr2kN4btcYDAAAAAAAA5AHUCktGIb0LAAAAAAAAAMgD2BvpBcQ6AAAAAAAAgPsCRjcaav0AAAAAAAAA9wHMHljM9pcAAAAAAAAA5AOMblAckwEAAAAAAAD4HcDsQQcAAAAAAABAPkAsHD2wqC0EAAAAAAAA4D6A1oZDbYJlLzwCAAAAAAAApAH0pvcDCK1xAAAAAAAAAHkAvZBS92gkzlcbBwAAAAAAAJAHUC68zpSBsb26DgAAAAAAACAfoDXh6joAAAAAAACAfABPRAAAAAAAAP8HKIkPELX2qrqPPzwCAAAAAAAAXAV4A8N+Sq06PvkiAAAAAElFTkSuQmCC' },
+  { match: 'page=favorites&s=view&id=', icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEABAMAAACuXLVVAAAAElBMVEX///8AAABOAACBEBD/UVH///9FPR7/AAAAAXRSTlMBN+Ho8AAAAShJREFUeNrt3c0RgyAQBlBbsIW0kBbSgv23kotcNsPwM0xck/fdkAUfNwdG3bYzzy9niwEAAAAAAAC4DBA7jkr2kN4btcYDAAAAAAAA5AHUCktGIb0LAAAAAAAAAMgD2BvpBcQ6AAAAAAAAgPsCRjcaav0AAAAAAAAA9wHMHljM9pcAAAAAAAAA5AOMblAckwEAAAAAAAD4HcDsQQcAAAAAAABAPkAsHD2wqC0EAAAAAAAA4D6A1oZDbYJlLzwCAAAAAAAApAH0pvcDCK1xAAAAAAAAAHkAvZBS92gkzlcbBwAAAAAAAJAHUC68zpSBsb26DgAAAAAAACAfoDXh6joAAAAAAACAfABPRAAAAAAAAP8HKIkPELX2qrqPPzwCAAAAAAAAXAV4A8N+Sq06PvkiAAAAAElFTkSuQmCC' },
+  { match: 'page=post&s=view&id=', icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEABAMAAACuXLVVAAAAElBMVEX///8AAAAAGVQALYondf////+67aQPAAAAAXRSTlMBN+Ho8AAAAShJREFUeNrt3c0RgyAQBlBbsIW0kBbSgv23kotcNsPwM0xck/fdkAUfNwdG3bYzzy9niwEAAAAAAAC4DBA7jkr2kN4btcYDAAAAAAAA5AHUCktGIb0LAAAAAAAAAMgD2BvpBcQ6AAAAAAAAgPsCRjcaav0AAAAAAAAA9wHMHljM9pcAAAAAAAAA5AOMblAckwEAAAAAAAD4HcDsQQcAAAAAAABAPkAsHD2wqC0EAAAAAAAA4D6A1oZDbYJlLzwCAAAAAAAApAH0pvcDCK1xAAAAAAAAAHkAvZBS92gkzlcbBwAAAAAAAJAHUC68zpSBsb26DgAAAAAAACAfoDXh6joAAAAAAACAfABPRAAAAAAAAP8HKIkPELX2qrqPPzwCAAAAAAAAXAV4A8N+Sq06PvkiAAAAAElFTkSuQmCC' },
+  { match: 'user:', icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEABAMAAACuXLVVAAAAElBMVEX///8AAABVAHmNAMrNnf////9vNKohAAAAAXRSTlMBN+Ho8AAAAShJREFUeNrt3c0RgyAQBlBbsIW0kBbSgv23kotcNsPwM0xck/fdkAUfNwdG3bYzzy9niwEAAAAAAAC4DBA7jkr2kN4btcYDAAAAAAAA5AHUCktGIb0LAAAAAAAAAMgD2BvpBcQ6AAAAAAAAgPsCRjcaav0AAAAAAAAA9wHMHljM9pcAAAAAAAAA5AOMblAckwEAAAAAAAD4HcDsQQcAAAAAAABAPkAsHD2wqC0EAAAAAAAA4D6A1oZDbYJlLzwCAAAAAAAApAH0pvcDCK1xAAAAAAAAAHkAvZBS92gkzlcbBwAAAAAAAJAHUC68zpSBsb26DgAAAAAAACAfoDXh6joAAAAAAACAfABPRAAAAAAAAP8HKIkPELX2qrqPPzwCAAAAAAAAXAV4A8N+Sq06PvkiAAAAAElFTkSuQmCC' }
+];
+
+const HQPORNER_FAVICON_MAP = [
+  { match: 'https://hqporner.com/', icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAWlBMVEXffIz////99PXnmqb55ej//f744eX++/vlkp/zz9XyyM7mlqPiiJfggI/88PLuucHhg5LqprH99/j66+355+r119zooKvts7zkjZvwwsn55un32+Dsr7n00ddAjbZCAAAA90lEQVQ4y93RW26EMAwFUN9ACAl50/DozOx/m3WoNKQS4r9zP7BkjhKw6XOioBaiSQBcXMio0dsJenxNROMA0RElgfwyHjK4S7A9oIx1q8DcNeD7DVJGPxJFLWVoAfe2AwRIHbm3ZpgGzGkbU1+Bgdrr5cnj0QApvBCKQdTIK3GWGUMDIGt+gXgSp/sLvAnB+Bsw8FRsYeAurjjncPmRLWh/MyiYS5DyMTX7knK9BLbUUcdV1F476nZZqmh+NMsS8PxmmqGOdXsA9Rh6xxRTd7EXzYXcshcP9aQz0UZ3FMulEhsyhpFuYgvkHu9E8vDL7RFaSU3/JT+TiA0zsDKrpgAAAABJRU5ErkJggg==' }
+];
+// --- END CUSTOM FAVICON MAPS ---
+
+async function suspendWithPlaceholder(tab) {
+  let favIconUrl = tab.favIconUrl;
+  const url = tab.url || "";
+
+  // 1. Check Eporner Custom Favicons
+  // if (url.includes("eporner.com")) {
+    // for (const rule of EPORNER_FAVICON_MAP) {
+      // if (url.includes(rule.match)) {
+        // favIconUrl = rule.icon;
+        // break; 
+      // }
+    // }
+  // }
+  // 2. Check Rule34 Custom Favicons
+  /*else*/ if (url.includes("rule34.xxx")) {
+    for (const rule of RULE34_FAVICON_MAP) {
+      if (url.includes(rule.match)) {
+        favIconUrl = rule.icon;
+        break; 
+      }
+    }
+  }
+  // 3. Check HQPorner Custom Favicons
+  else if (url.includes("hqporner.com")) {
+    for (const rule of HQPORNER_FAVICON_MAP) {
+      if (url.includes(rule.match)) {
+        favIconUrl = rule.icon;
+        break; 
+      }
+    }
+  }
+
+  const suspendedUrl = SUSPENDED_PREFIX +
+    `?uri=${encodeURIComponent(tab.url)}&ttl=${encodeURIComponent(tab.title || '')}` +
+    (favIconUrl ? `&favicon=${encodeURIComponent(favIconUrl)}` : '');
+    
+  await chrome.tabs.update(tab.id, { url: suspendedUrl });
+}
+
+// --- NEU: Berechnet die individuelle Zeit für jeden Tab ---
+function getTabSuspendTimeMs(url, globalMinutes, customRules) {
+  if (!customRules || customRules.length === 0) return globalMinutes * 60 * 1000;
+  
+  for (const rule of customRules) {
+    // Split beim letzten Doppelpunkt
+    const lastColonIdx = rule.lastIndexOf(':');
+    if (lastColonIdx === -1) continue; // Ungültiges Format
+    
+    const pattern = rule.substring(0, lastColonIdx).trim();
+    const mins = parseFloat(rule.substring(lastColonIdx + 1).replace(',', '.').trim());
+    
+    if (isNaN(mins)) continue;
+
+    let isMatch = false;
+
+    // 1. RegEx Match (z.B. /rule34/ )
+    if (pattern.startsWith('/') && pattern.endsWith('/') && pattern.length > 2) {
+      try { isMatch = new RegExp(pattern.slice(1, -1)).test(url); } catch(e) {}
+    } 
+    // 2. Wildcard Match (z.B. https://*id=* )
+    else if (pattern.includes('*')) {
+      const regexStr = '^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '.*') + '$';
+      try { isMatch = new RegExp(regexStr, 'i').test(url); } catch(e) {}
+    } 
+    // 3. Substring / Domain Match (z.B. rule34.xxx )
+    else {
+      isMatch = url.includes(pattern);
+    }
+
+    if (isMatch) return mins * 60 * 1000; // Eigene Zeit zurückgeben
+  }
+  
+  return globalMinutes * 60 * 1000; // Fallback zur globalen Zeit
+}
+
+// Timer to check for inactivity
+async function checkTabs() {
+  const settings = await getSettingsCached();
+  const hasCustomRules = settings.customSuspendTimes && settings.customSuspendTimes.length > 0;
+if (settings.autoSuspendMinutes === 0 && !hasCustomRules) return; // Nur abbrechen, wenn alles auf 0/leer steht
+
+  const autoSuspendTime = settings.autoSuspendMinutes * 60 * 1000;
+  const tabs = await chrome.tabs.query({});
+  
+  // Check for tab favicon (only when background processor is not running)
+  if (!fixFaviconProcessor.isRunning) {
+    fixFaviconTabs.clear();
+
+    if (settings.fixFaviconEnabled) {
+      const batchSize = Number(settings.fixFaviconBatchSize) || 0; // 0 = unlimited
+      let added = 0;
+      for (const tab of tabs) {
+        if (needsSuspendedFaviconFix(tab)) {
+          const retryCount = fixFaviconRetryCounts.get(tab.id) || 0;
+          if (settings.fixFaviconMaxRetries > 0 && retryCount >= settings.fixFaviconMaxRetries) {
+            continue; // reached retry limit
+          }
+          fixFaviconTabs.add(tab.id);
+          added++;
+          if (batchSize > 0 && added >= batchSize) break; // limit batch per checkTabs run
+        }
+      }
+
+      if (fixFaviconTabs.size > 0) {
+        fixFaviconProcessor.start();
+      }
+    } else {
+      // Feature disabled: ensure processor is not running
+      fixFaviconProcessor.stop();
+    }
+  }
+
+  // Get the focused window and active tab in focused window
+  const windows = await chrome.windows.getAll();
+  const focusedWindow = windows.find(w => w.focused);
+  let focusedWindowActiveTabId = null;
+  
+  if (focusedWindow) {
+    const activeTabs = await chrome.tabs.query({ windowId: focusedWindow.id, active: true });
+    if (activeTabs.length > 0) {
+      focusedWindowActiveTabId = activeTabs[0].id;
+    }
+  }
+  
+  // Collect eligible tabs first, then suspend in concurrent batches below.
+  const suspendTargets = [];
+
+for (const tab of tabs) {
+    // Ignoriere Platzhalter und interne Seiten (aber NICHT mehr discarded Tabs)
+    if (isSuspendedTab(tab) || isInternalUrl(tab.url)) {
+      continue;
+    }
+    
+    // Skip tabs that are currently being unsuspended
+    if (isTabUnsuspending(tab.id)) {
+      continue;
+    }
+
+    // NEU: Wenn die andere Extension den Tab entladen hat, zwinge ZeroRAM zur sofortigen Übernahme
+    if (tab.discarded) {
+      suspendTargets.push(tab);
+      continue; // Überspringt die restliche Zeitberechnung für diesen Tab
+    }
+    
+    if (isWhitelisted(tab.url, settings)) continue;
+
+    // Dynamic protections below also refresh the tab's seen timestamp: while
+    // a tab is protected its timestamps would otherwise stay frozen at the
+    // last activation, so the moment the protection lapses (audio pausing
+    // between tracks, the focused tab being switched away from) the tab would
+    // instantly be hours past the idle deadline. Stamping each scan restarts
+    // a full idle countdown from when the protection ends. Static protections
+    // (whitelist, pinned) intentionally do not stamp.
+    if (settings.neverSuspendAudio && tab.audible) {
+      seenTimestamps[tab.id] = Date.now();
+      continue; // Skip tabs that are playing audio
+    }
+
+    if (settings.neverSuspendPinned && tab.pinned) {
+      continue; // Skip pinned tabs
+    }
+
+    // Check if this is the last remembered active tab when browser lost focus
+    // This should be checked first, regardless of current active state
+    if (settings.rememberLastActiveTab && tab.id === lastActiveTabId && !focusedWindow) {
+      seenTimestamps[tab.id] = Date.now();
+      continue;
+    }
+
+    // Handle active tab protection based on settings
+    if (tab.active) {
+      if (settings.neverSuspendActive) {
+        // If neverSuspendActive is enabled, protect active tabs in all windows
+        seenTimestamps[tab.id] = Date.now();
+        continue;
+      } else {
+        // Default behavior: only protect active tab in the currently focused window
+        if (tab.id === focusedWindowActiveTabId) {
+          seenTimestamps[tab.id] = Date.now();
+          continue;
+        }
+        // Active tabs in non-focused windows can be suspended
+      }
+    }
+
+    // Get both timestamps
+    const chromeTimestamp = tab.lastAccessed;
+    const ourTimestamp = seenTimestamps[tab.id];
+	const tabSuspendTimeMs = getTabSuspendTimeMs(tab.url, settings.autoSuspendMinutes, settings.customSuspendTimes);
+
+    let last;
+    if (typeof chromeTimestamp === 'number' && typeof ourTimestamp === 'number') {
+      // Both timestamps exist, use the more recent one
+      last = Math.max(chromeTimestamp, ourTimestamp);
+    } else if (typeof ourTimestamp === 'number') {
+      // Only our timestamp exists
+      last = ourTimestamp;
+    } else if (typeof chromeTimestamp === 'number') {
+      // Only Chrome timestamp exists
+      last = chromeTimestamp;
+    } else {
+      // Neither exists, set current time and skip suspension check
+      seenTimestamps[tab.id] = Date.now();
+      continue;
+    }
+
+if (tabSuspendTimeMs === 0) continue; // Wenn eine Custom-Rule auf 0 steht, diesen Tab ignorieren (nie suspendieren)
+	
+if (last < (Date.now() - tabSuspendTimeMs)) {
+  suspendTargets.push(tab);
+}
+  }
+
+  // Suspend in concurrent batches (same pattern as the bulk operations):
+  // sequentially, each discard-readiness wait can take seconds, so a large
+  // idle backlog would stretch one scan to minutes while its snapshot grows
+  // stale. Revalidation inside suspendTab handles per-tab staleness; batching
+  // bounds the total wall-clock time.
+  const concurrency = settings.suspendBatchConcurrency || 5;
+  for (let i = 0; i < suspendTargets.length; i += concurrency) {
+    const batch = suspendTargets.slice(i, i + concurrency);
+    await Promise.allSettled(batch.map(tab =>
+      suspendTab(tab, settings, true).catch(error => {
+        // Tabs can disappear between query and update/discard operations.
+        logUnexpectedTabError('Failed to suspend tab during checkTabs', error);
+      })
+    ));
+  }
+  // Persist any updates
+  saveSeenTimestamps();
+}
+
+// ==== Event Handlers ====
+chrome.runtime.onInstalled.addListener(async () => {
+  // Ensure defaults saved on install/update
+  const settings = await getSettings();
+  await saveSettings(settings);
+  const { [TEMP_KEY]: tmp = [] } = await chrome.storage.session.get(TEMP_KEY);
+  setTempWhitelistFromStorageValue(tmp);
+  // Load last active tab ID
+  await loadLastActiveTab();
+});
+
+// Restore persisted state on service worker startup (cold start).
+async function initializeState() {
+  try {
+    const { [TEMP_KEY]: tmp = [] } = await chrome.storage.session.get(TEMP_KEY);
+    setTempWhitelistFromStorageValue(tmp);
+    const { utsSeen = {} } = await chrome.storage.session.get('utsSeen');
+    // Merge persisted timestamps instead of replacing the object.
+    // Event handlers (e.g. onActivated) may have already written fresh
+    // timestamps into seenTimestamps during the async gap above; a plain
+    // assignment would silently discard those writes.
+    for (const [key, value] of Object.entries(utsSeen)) {
+      if (!(key in seenTimestamps) || seenTimestamps[key] < value) {
+        seenTimestamps[key] = value;
+      }
+    }
+    // Load last active tab ID and per-window active tab map from session storage.
+    await loadLastActiveTab();
+    await loadLastActiveTabPerWindow();
+
+    // Restore the previously focused window before falling back to the live
+    // focus query below: when a focus switch wakes the worker, the live query
+    // already reports the NEW window, so only the persisted value can tell us
+    // which window just lost focus.
+    const { [LAST_FOCUSED_WINDOW_KEY]: savedFocusedWindowId } =
+      await chrome.storage.session.get(LAST_FOCUSED_WINDOW_KEY);
+    if (
+      lastFocusedWindowId === chrome.windows.WINDOW_ID_NONE &&
+      typeof savedFocusedWindowId === 'number'
+    ) {
+      lastFocusedWindowId = savedFocusedWindowId;
+    }
+
+    // Initialize per-window active tab tracking
+    const windows = await chrome.windows.getAll();
+    const currentWindowIds = new Set(windows.map(w => w.id));
+
+    // Remove entries for windows that no longer exist.
+    for (const winId of lastActiveTabPerWindow.keys()) {
+      if (!currentWindowIds.has(winId)) {
+        lastActiveTabPerWindow.delete(winId);
+      }
+    }
+
+    let focusedWindowActiveTabId = null;
+    const focusedWindow = windows.find(w => w.focused);
+    // Keep startup init from overwriting a newer focus event.
+    if (lastFocusedWindowId === chrome.windows.WINDOW_ID_NONE) {
+      lastFocusedWindowId = focusedWindow ? focusedWindow.id : chrome.windows.WINDOW_ID_NONE;
+    }
+    let needsSave = false;
+    for (const window of windows) {
+      const activeTabs = await chrome.tabs.query({ windowId: window.id, active: true });
+      if (activeTabs.length > 0) {
+        const activeTab = activeTabs[0];
+        // Only seed if not already restored from session storage;
+        // overwriting would discard the persisted previous-tab identity.
+        if (!lastActiveTabPerWindow.has(window.id)) {
+          lastActiveTabPerWindow.set(window.id, {
+            tabId: activeTab.id,
+            timestamp: Date.now()
+          });
+          needsSave = true;
+        }
+        if (focusedWindow && focusedWindow.id === window.id) {
+          focusedWindowActiveTabId = activeTab.id;
+        }
+      }
+    }
+    // Persist once if anything was added or stale entries removed.
+    if (needsSave || lastActiveTabPerWindow.size !== currentWindowIds.size) {
+      chrome.storage.session.set({
+        [LAST_ACTIVE_PER_WINDOW_KEY]: Object.fromEntries(lastActiveTabPerWindow)
+      });
+    }
+    // Initialize lastActiveTabId to current focused window's active tab (if available)
+    if (focusedWindowActiveTabId && lastActiveTabId !== focusedWindowActiveTabId) {
+      lastActiveTabId = focusedWindowActiveTabId;
+      await saveLastActiveTab();
+    }
+  } catch (error) {
+    console.warn('Failed to initialize service worker state:', error);
+  } finally {
+    // Never leave the gate closed: a failed restore must not deadlock every
+    // event handler, so handlers proceed with defaults in that case.
+    initDone = true;
+  }
+}
+const initPromise = initializeState();
+
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  if (!initDone) await initPromise;
+  const now = Date.now();
+  const { tabId, windowId } = activeInfo;
+  let previousTabId = null;
+
+  // Handle the previously active tab in this window
+  const lastActiveInWindow = lastActiveTabPerWindow.get(windowId);
+  if (lastActiveInWindow && lastActiveInWindow.tabId !== tabId) {
+    // Update timestamp for the previously active tab to prevent immediate suspension
+    seenTimestamps[lastActiveInWindow.tabId] = now;
+    previousTabId = lastActiveInWindow.tabId;
+  }
+
+  // Update timestamp for the newly activated tab
+  seenTimestamps[tabId] = now;
+  saveSeenTimestamps();
+
+  // Track the new active tab for this window (persisted to session storage).
+  setLastActiveTabInWindow(windowId, { tabId, timestamp: now });
+
+  // Update last active tab when user switches tabs
+  if (lastActiveTabId !== tabId) {
+    lastActiveTabId = tabId;
+    await saveLastActiveTab();
+  }
+  // Attempt to re-discard only the tab that just became inactive in this window.
+  if (previousTabId !== null) {
+    scheduleReDiscard(previousTabId);
+  }
+
+  // --- NEU: Icon prüfen und anpassen, wenn der Tab gewechselt wird ---
+  await updateTabIcon(tabId);
+});
+
+// Track last active tab on focus changes to avoid periodic updates in checkTabs
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  if (!initDone) await initPromise;
+  const now = Date.now();
+  const previousFocusedWindowId = lastFocusedWindowId;
+  // Update immediately to avoid races between rapid consecutive focus events.
+  lastFocusedWindowId = windowId;
+  // Persist so a cold-started worker still knows which window lost focus.
+  chrome.storage.session.set({ [LAST_FOCUSED_WINDOW_KEY]: windowId });
+
+  try {
+    let seenUpdated = false;
+
+    // Treat focus transition as inactivity for the previously focused window's active tab.
+    if (
+      previousFocusedWindowId !== chrome.windows.WINDOW_ID_NONE &&
+      previousFocusedWindowId !== windowId
+    ) {
+      seenUpdated = await markWindowActiveTabSeen(previousFocusedWindowId, now);
+    }
+
+    if (windowId === chrome.windows.WINDOW_ID_NONE) {
+      // Browser lost focus: persist current lastActiveTabId for rememberLastActiveTab logic
+      if (seenUpdated) saveSeenTimestamps();
+      await saveLastActiveTab();
+      return;
+    }
+    const activeTabs = await chrome.tabs.query({ windowId, active: true });
+    if (activeTabs.length > 0) {
+      const activeTabId = activeTabs[0].id;
+      // Keep per-window active tab tracking fresh even if onActivated doesn't fire on focus switch.
+      setLastActiveTabInWindow(windowId, { tabId: activeTabId, timestamp: now });
+      // Only update global focused-tab memory if this event is still current.
+      if (lastFocusedWindowId === windowId && lastActiveTabId !== activeTabId) {
+        lastActiveTabId = activeTabId;
+        await saveLastActiveTab();
+      }
+      // --- NEU: Icon des fokussierten Tabs im neuen Fenster updaten ---
+      await updateTabIcon(activeTabId, activeTabs[0]);
+    }
+    if (seenUpdated) saveSeenTimestamps();
+  } catch (e) {
+    console.warn('onFocusChanged handler failed:', e);
+  }
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (!initDone) await initPromise;
+
+  // --- NEU: Icon updaten, wenn sich die URL (Whitelist) oder Audio-Ausgabe ändert ---
+  if (changeInfo.url !== undefined || changeInfo.audible !== undefined || changeInfo.status === 'complete') {
+    await updateTabIcon(tabId, tab);
+  }
+
+  if (changeInfo.url) {
+    if (changeInfo.url.startsWith(SUSPENDED_PREFIX)) {
+      suspendedFaviconReadyTabs.delete(tabId);
+    } else {
+      suspendedFaviconReadyTabs.delete(tabId);
+      cancelPendingDiscardWait(tabId);
+    }
+  }
+
+  if (
+    changeInfo.favIconUrl &&
+    isSuspendedTab(tab) &&
+    !isExtensionDefaultFaviconUrl(changeInfo.favIconUrl)
+  ) {
+    markSuspendedFaviconReady(tabId);
+  }
+
+  if (changeInfo.status === 'complete') {
+    seenTimestamps[tabId] = Date.now();
+    saveSeenTimestamps();
+    
+    if (unsuspendingTabs.has(tabId)) {
+      unsuspendingTabs.delete(tabId);
+    }
+    
+    if (fixFaviconTabs.has(tabId)) {
+      fixFaviconTabs.delete(tabId);
+    }
+    const suspended = isSuspendedTab(tab);
+    if (suspended && hasUsableSuspendedFavicon(tab)) {
+      suspendedFaviconReadyTabs.add(tabId);
+      fixFaviconRetryCounts.delete(tabId);
+    }
+    
+    const pendingInfo = pendingDiscardTabs.get(tabId);
+    if (pendingInfo && suspended) {
+      pendingInfo.pageComplete = true;
+      if (suspendedFaviconReadyTabs.has(tabId) || hasUsableSuspendedFavicon(tab)) {
+        pendingInfo.faviconReady = true;
+        suspendedFaviconReadyTabs.add(tabId);
+      }
+      pendingInfo.tryResolve();
+    }
+
+    if (!pendingInfo && suspended && !tab.active && !tab.discarded) {
+      scheduleReDiscard(tabId);
+    }
+  }
+});
+
+// When a new tab is created (e.g., gesture/drag-to-search or open-in-new-tab),
+// proactively update the seen timestamp of the opener/previous active tab so it
+// won’t be considered idle immediately after focus shifts.
+chrome.tabs.onCreated.addListener(async (tab) => {
+  if (!initDone) await initPromise;
+  const now = Date.now();
+  try {
+    // 1) If Chrome provides an opener, stamp it as recently seen
+    if (typeof tab.openerTabId === 'number') {
+      seenTimestamps[tab.openerTabId] = now;
+      saveSeenTimestamps();
+    }
+
+    // 2) Fallback: use our lastActiveTabPerWindow to stamp the previously
+    //    active tab in this window. This helps when openerTabId is missing
+    //    but the new tab becomes active immediately (common in some gesture
+    //    extensions).
+    const lastActiveInWindow = lastActiveTabPerWindow.get(tab.windowId);
+    if (lastActiveInWindow && lastActiveInWindow.tabId !== tab.id) {
+      seenTimestamps[lastActiveInWindow.tabId] = now;
+      saveSeenTimestamps();
+    }
+
+    // If the newly created tab is already active, reflect it as the last active tab
+    if (tab.active) {
+      if (lastActiveTabId !== tab.id) {
+        lastActiveTabId = tab.id;
+        await saveLastActiveTab();
+      }
+      // Also record this activation in our per-window map
+      setLastActiveTabInWindow(tab.windowId, { tabId: tab.id, timestamp: now });
+    }
+  } catch (e) {
+    console.warn('onCreated handler failed:', e);
+  }
+});
+
+// Clean up tracking when tabs are closed
+chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
+  if (!initDone) await initPromise;
+  unsuspendingTabs.delete(tabId);
+  fixFaviconTabs.delete(tabId);
+  fixFaviconRetryCounts.delete(tabId);
+  suspendedFaviconReadyTabs.delete(tabId);
+  pendingReDiscardTabIds.delete(tabId);
+  reDiscardRetryCounts.delete(tabId);
+
+  // Clean up pending discard if tab is closed
+  cancelPendingDiscardWait(tabId);
+
+  // Clean up per-window active tab tracking
+  const { windowId } = removeInfo;
+  const lastActiveInWindow = lastActiveTabPerWindow.get(windowId);
+  if (lastActiveInWindow && lastActiveInWindow.tabId === tabId) {
+    removeLastActiveTabInWindow(windowId);
+  }
+
+  delete seenTimestamps[tabId];
+  saveSeenTimestamps();
+});
+
+// Chrome can replace a tab's id without a remove/create pair (e.g. a
+// prerendered page swapping in). Carry the idle timestamp and unsuspend
+// tracking over to the new id so the tab is neither instantly idle-expired
+// nor stuck protected, and drop per-renderer state tied to the old id.
+chrome.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
+  if (!initDone) await initPromise;
+  if (removedTabId in seenTimestamps) {
+    seenTimestamps[addedTabId] = seenTimestamps[removedTabId];
+    delete seenTimestamps[removedTabId];
+    saveSeenTimestamps();
+  }
+  const unsuspendingAt = unsuspendingTabs.get(removedTabId);
+  if (unsuspendingAt !== undefined) {
+    unsuspendingTabs.set(addedTabId, unsuspendingAt);
+    unsuspendingTabs.delete(removedTabId);
+  }
+  // Favicon/discard state belongs to the old renderer and cannot carry over.
+  fixFaviconTabs.delete(removedTabId);
+  fixFaviconRetryCounts.delete(removedTabId);
+  suspendedFaviconReadyTabs.delete(removedTabId);
+  pendingReDiscardTabIds.delete(removedTabId);
+  reDiscardRetryCounts.delete(removedTabId);
+  cancelPendingDiscardWait(removedTabId);
+  // Keep tracking maps pointing at the live id.
+  for (const [windowId, tracked] of lastActiveTabPerWindow) {
+    if (tracked && tracked.tabId === removedTabId) {
+      setLastActiveTabInWindow(windowId, { tabId: addedTabId, timestamp: tracked.timestamp });
+    }
+  }
+  if (lastActiveTabId === removedTabId) {
+    lastActiveTabId = addedTabId;
+    await saveLastActiveTab();
+  }
+});
+
+// A tab dragged out of a window leaves the source window's per-window entry
+// pointing at a tab that is no longer there; markWindowActiveTabSeen would
+// then stamp the moved tab instead of the source window's real active tab.
+// Drop the stale entry so the next lookup falls back to a live query.
+chrome.tabs.onDetached.addListener(async (tabId, detachInfo) => {
+  if (!initDone) await initPromise;
+  const tracked = lastActiveTabPerWindow.get(detachInfo.oldWindowId);
+  if (tracked && tracked.tabId === tabId) {
+    removeLastActiveTabInWindow(detachInfo.oldWindowId);
+  }
+});
+
+// Closing a window drops its per-window tracking entry immediately;
+// previously stale entries were only pruned on the next cold start.
+chrome.windows.onRemoved.addListener(async (windowId) => {
+  if (!initDone) await initPromise;
+  if (lastActiveTabPerWindow.has(windowId)) {
+    removeLastActiveTabInWindow(windowId);
+  }
+});
+
+// Receive commands from popup/options
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  const respond = (payload) => {
+    try {
+      sendResponse(payload);
+    } catch (_) {}
+  };
+
+  (async () => {
+    if (!initDone) await initPromise;
+    try {
+      if (msg.command === 'suspendTab') {
+        const tab = await chrome.tabs.get(msg.tabId);
+        const settings = await getSettings();
+        await suspendTab(tab, settings);
+        respond({ done: true });
+      } else if (msg.command === 'unsuspendTab') {
+        // Start tracking this tab as being unsuspended
+        await unsuspendTabWithUrl(msg.tabId, msg.originalUrl);
+        respond({ done: true });
+      } else if (msg.command === 'suspendOthers') {
+        // Suspend other tabs in current window only
+        await suspendOthersInWindow(msg.tabId);
+        respond({ done: true });
+      } else if (msg.command === 'unsuspendAll') {
+        await unsuspendAllTabs(!!msg.withProgress);
+        respond({ done: true });
+      } else if (msg.command === 'unsuspendAllThisWindow') {
+        // Unsuspend all suspended tabs in current window only
+        const currentTab = await chrome.tabs.get(msg.tabId);
+        await unsuspendAllTabsInWindow(currentTab.windowId);
+        respond({ done: true });
+      } else if (msg.command === 'updateSettings') {
+        await saveSettings(msg.settings);
+        respond({ done: true });
+      } else if (msg.command === 'toggleTempWhitelist') {
+        const url = msg.url;
+        if (tempWhitelist.has(url)) {
+          tempWhitelist.delete(url);
+        } else {
+          tempWhitelist.add(url);
+        }
+        await persistTempWhitelist();
+        respond({ whitelisted: tempWhitelist.has(url) });
+      } else if (msg.command === 'checkTempWhitelist') {
+        const whitelisted = tempWhitelist.has(msg.url);
+        respond({ whitelisted });
+      } else if (msg.command === 'suspendSelectedTabs') {
+        // Force suspend selected tabs (ignore whitelist but respect internal URLs)
+        await suspendSelectedTabs(msg.tabIds);
+        respond({ done: true });
+      } else if (msg.command === 'unsuspendSelectedTabs') {
+        // Force unsuspend selected tabs
+        await unsuspendSelectedTabs(msg.tabIds);
+        respond({ done: true });
+      } else if (msg.command === 'suspendAllOthersAllWindows') {
+        // Suspend all other tabs across all windows (respects suspension prevention settings)
+        await suspendOthersInAllWindows(msg.tabId, !!msg.withProgress);
+        respond({ done: true });
+      } else if (msg.command === 'cancelBulk') {
+        cancelBulkNow();
+        respond({ done: true });
+      } else if (msg.command === 'faviconReady') {
+        // Sent by suspended.js after it has set the <link rel="icon"> in the DOM.
+        // Confirm Chrome actually registered the favicon (rather than trusting a
+        // fixed delay) before allowing the tab to be discarded. Skip entirely in
+        // placeholder-only mode, where tabs are never discarded and favicon
+        // readiness is irrelevant — avoids needless polling at large tab counts.
+        const tabId = sender.tab ? sender.tab.id : null;
+        if (typeof tabId === 'number') {
+          const settings = await getSettingsCached();
+          if (settings.useNativeDiscard) {
+            confirmSuspendedFaviconReady(tabId);
+          }
+        }
+        respond({ done: true });
+      } else if (msg.command === 'startUnsuspending') {
+        // Get the current tab ID from sender
+        const tabId = sender.tab ? sender.tab.id : msg.tabId;
+        if (tabId) {
+          markTabUnsuspending(tabId);
+        }
+        respond({ done: true });
+      } else if (msg.command === 'unsuspendNavigate') {
+        // Navigate the tab via chrome.tabs.update() which has the necessary
+        // privileges for file:// and other restricted URL schemes that
+        // location.href cannot load from an extension page.
+        const tabId = sender.tab ? sender.tab.id : null;
+        if (tabId && msg.url) {
+          await chrome.tabs.update(tabId, { url: msg.url });
+          respond({ done: true });
+        } else {
+          respond({ done: false, error: 'Missing tab or url' });
+        }
+      } else {
+        respond({ done: false, error: 'Unknown command' });
+      }
+    } catch (error) {
+      logUnexpectedTabError(`Message command failed (${msg && msg.command})`, error);
+      respond({
+        done: false,
+        error: isTabGoneError(error)
+          ? 'Tab no longer exists'
+          : String((error && error.message) || error || 'Unknown error')
+      });
+    }
+  })();
+  // indicate async
+  return true;
+});
+
+// Schedule repeating alarm every minute to ensure worker wakes up even when inactive
+function scheduleCheckAlarm() {
+  chrome.alarms.create('utsAutoCheck', { periodInMinutes: ALARM_PERIOD_MINUTES });
+}
+
+chrome.runtime.onInstalled.addListener(scheduleCheckAlarm);
+chrome.runtime.onStartup.addListener(scheduleCheckAlarm);
+
+chrome.alarms.onAlarm.addListener(async ({ name }) => {
+  if (name !== 'utsAutoCheck') return;
+  if (!initDone) await initPromise;
+  if (running) return;          // if running, skip this alarm
+  running = true;
+  try {
+    await checkTabs();
+  } catch (error) {
+    logUnexpectedTabError('Auto check failed', error);
+  } finally {
+    running = false;
+  }
+});
+// --- NEU: Interner 10-Sekunden Taktgeber für schnelle Suspend-Zeiten (< 1 Min) ---
+setInterval(async () => {
+  if (!initDone) return;
+  if (running) return;
+  running = true;
+  try {
+    await checkTabs();
+  } catch (e) {
+    // Fehler ignorieren
+  } finally {
+    running = false;
+  }
+}, 1000); // 10000 ms = 10 Sekunden
+
+// Best-effort flush before the worker is suspended. onSuspend is not reliably
+// delivered to MV3 service workers (and beforeunload never fires for them),
+// so nothing critical may depend on this: seen-timestamp writes are debounced
+// at 2s and the worker stays alive well past that after any event.
+chrome.runtime.onSuspend?.addListener(() => {
+  fixFaviconProcessor.stop();
+  flushSeenTimestampsNow();
+});
+
+// Utility: targeted re-discard for queued tab IDs (no full inactive-tab scan).
+// Batch size and retry limit reuse fixFavicon settings by request:
+// - fixFaviconBatchSize: max items per run (0 = unlimited)
+// - fixFaviconMaxRetries: discard failure retry cap (0 = unlimited)
+async function processQueuedReDiscardTabs() {
+  const settings = await getSettingsCached();
+  if (!settings.useNativeDiscard) {
+    pendingReDiscardTabIds.clear();
+    reDiscardRetryCounts.clear();
+    return;
+  }
+
+  const configuredBatchSize = Number(settings.fixFaviconBatchSize) || 0;
+  const batchSize = configuredBatchSize > 0
+    ? Math.max(1, Math.floor(configuredBatchSize))
+    : pendingReDiscardTabIds.size;
+  if (batchSize <= 0 || pendingReDiscardTabIds.size === 0) return;
+
+  const maxRetries = Number(settings.fixFaviconMaxRetries) || 0;
+  const candidates = Array.from(pendingReDiscardTabIds).slice(0, batchSize);
+  for (const tabId of candidates) {
+    pendingReDiscardTabIds.delete(tabId);
+
+    // Skip tabs that are currently being unsuspended.
+    if (isTabUnsuspending(tabId)) {
+      reDiscardRetryCounts.delete(tabId);
+      continue;
+    }
+
+    // The primary suspend/favicon-fix path owns the discard once it is waiting.
+    if (pendingDiscardTabs.has(tabId)) {
+      reDiscardRetryCounts.delete(tabId);
+      continue;
+    }
+
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (!isSuspendedTab(tab) || tab.discarded) {
+        reDiscardRetryCounts.delete(tabId);
+        continue;
+      }
+
+      // Active tabs cannot be discarded; wait for next inactivity event.
+      if (tab.active) {
+        reDiscardRetryCounts.delete(tabId);
+        continue;
+      }
+
+      if (await discardSuspendedTabWhenReady(tabId, 'Scheduled re-discard')) {
+        reDiscardRetryCounts.delete(tabId);
+      } else {
+        const latestTab = await chrome.tabs.get(tabId).catch(() => null);
+        if (!latestTab || !isSuspendedTab(latestTab) || latestTab.discarded || latestTab.active) {
+          reDiscardRetryCounts.delete(tabId);
+          continue;
+        }
+        const nextRetry = (reDiscardRetryCounts.get(tabId) || 0) + 1;
+        if (maxRetries > 0 && nextRetry >= maxRetries) {
+          reDiscardRetryCounts.delete(tabId);
+        } else {
+          reDiscardRetryCounts.set(tabId, nextRetry);
+          pendingReDiscardTabIds.add(tabId);
+        }
+      }
+    } catch (e) {
+      const message = String((e && e.message) || '');
+      if (message.includes('No tab with id') || message.includes('Invalid tab ID')) {
+        reDiscardRetryCounts.delete(tabId);
+        continue;
+      }
+
+      const nextRetry = (reDiscardRetryCounts.get(tabId) || 0) + 1;
+      if (maxRetries > 0 && nextRetry >= maxRetries) {
+        reDiscardRetryCounts.delete(tabId);
+        continue;
+      }
+      reDiscardRetryCounts.set(tabId, nextRetry);
+      pendingReDiscardTabIds.add(tabId);
+    }
+  }
+}
+
+// Unsuspend a single tab by tab ID
+async function unsuspendTabById(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  if (isSuspendedTab(tab)) {
+    const original = parseOriginalUrlFromSuspended(tab.url);
+    if (original) {
+      markTabUnsuspending(tabId);
+      // Update timestamp immediately to prevent re-suspension
+      seenTimestamps[tabId] = Date.now();
+      saveSeenTimestamps();
+      await chrome.tabs.update(tabId, { url: original });
+      return true;
+    }
+  }
+  return false;
+}
+
+// Unsuspend a tab using original URL (for message handler)
+async function unsuspendTabWithUrl(tabId, originalUrl) {
+  markTabUnsuspending(tabId);
+  // Update timestamp immediately to prevent re-suspension
+  seenTimestamps[tabId] = Date.now();
+  saveSeenTimestamps();
+  await chrome.tabs.update(tabId, { url: originalUrl });
+}
+
+// Suspend other tabs in the same window
+async function suspendOthersInWindow(currentTabId) {
+  const currentTab = await chrome.tabs.get(currentTabId);
+  // Get all tabs in the window, including discarded ones
+  const tabs = await chrome.tabs.query({ windowId: currentTab.windowId });
+  const settings = await getSettings();
+  
+  // Build target list first
+  const targets = [];
+  for (const tab of tabs) {
+    if (tab.id !== currentTabId && !tab.active && !isInternalUrl(tab.url)) {
+      // Skip if tab is already suspended by our extension
+      if (isSuspendedTab(tab)) continue;
+      
+      // Check suspension prevention settings
+      if (settings.neverSuspendAudio && tab.audible) continue;
+      if (settings.neverSuspendPinned && tab.pinned) continue;
+      if (!isWhitelisted(tab.url, settings)) {
+        targets.push(tab);
+      }
+    }
+  }
+
+  // Process in concurrent batches
+  const concurrency = settings.suspendBatchConcurrency || 5;
+  for (let i = 0; i < targets.length; i += concurrency) {
+    const batch = targets.slice(i, i + concurrency);
+    await Promise.allSettled(batch.map(tab => suspendTab(tab, settings, true)));
+  }
+}
+
+// Suspend other tabs in all windows
+async function suspendOthersInAllWindows(currentTabId, withProgress = false) {
+  // Get all tabs, including discarded ones
+  const allTabs = await chrome.tabs.query({});
+  const settings = await getSettings();
+  
+  // Get the focused window and active tab in focused window for consistent logic
+  const windows = await chrome.windows.getAll();
+  const focusedWindow = windows.find(w => w.focused);
+  let focusedWindowActiveTabId = null;
+  
+  if (focusedWindow) {
+    const activeTabs = await chrome.tabs.query({ windowId: focusedWindow.id, active: true });
+    if (activeTabs.length > 0) {
+      focusedWindowActiveTabId = activeTabs[0].id;
+      // Update last active tab when browser is focused
+      if (lastActiveTabId !== focusedWindowActiveTabId) {
+        lastActiveTabId = focusedWindowActiveTabId;
+        await saveLastActiveTab();
+      }
+    }
+  }
+  
+  // Build target list first for accurate total
+  const targets = [];
+  for (const tab of allTabs) {
+    if (tab.id === currentTabId || isInternalUrl(tab.url)) continue;
+    if (isSuspendedTab(tab)) continue;
+    if (settings.neverSuspendAudio && tab.audible) continue;
+    if (settings.neverSuspendPinned && tab.pinned) continue;
+    if (isWhitelisted(tab.url, settings)) continue;
+
+    if (settings.rememberLastActiveTab && tab.id === lastActiveTabId && !focusedWindow) continue;
+    if (tab.active) {
+      if (settings.neverSuspendActive) continue;
+      if (tab.id === focusedWindowActiveTabId) continue;
+    }
+    targets.push(tab);
+  }
+
+  // Prepare cancel token
+  const cancelToken = newCancelToken();
+  const total = targets.length;
+  let processed = 0;
+
+  // Process in concurrent batches
+  const concurrency = settings.suspendBatchConcurrency || 5;
+  for (let i = 0; i < targets.length; i += concurrency) {
+    if (cancelToken.cancelled) break;
+    const batch = targets.slice(i, i + concurrency);
+    await Promise.allSettled(batch.map(tab =>
+      suspendTab(tab, settings, true).finally(() => {
+        processed += 1;
+        if (withProgress) postBulkProgress({ action: 'suspendAll', processed, total });
+      })
+    ));
+  }
+  if (withProgress) postBulkProgress({ action: 'suspendAll', processed, total, done: true, cancelled: cancelToken.cancelled });
+}
+
+// Unsuspend all tabs in all windows
+async function unsuspendAllTabs(withProgress = false) {
+  const tabs = await chrome.tabs.query({});
+  const targets = tabs.filter(t => isSuspendedTab(t));
+  const cancelToken = newCancelToken();
+  const total = targets.length;
+  let processed = 0;
+  for (const tab of targets) {
+    if (cancelToken.cancelled) break;
+    const original = parseOriginalUrlFromSuspended(tab.url);
+    if (original) {
+      markTabUnsuspending(tab.id);
+      // Update timestamp immediately to prevent re-suspension
+      seenTimestamps[tab.id] = Date.now();
+      await chrome.tabs.update(tab.id, { url: original });
+    }
+    processed += 1;
+    if (withProgress) postBulkProgress({ action: 'unsuspendAll', processed, total });
+  }
+  saveSeenTimestamps();
+  if (withProgress) postBulkProgress({ action: 'unsuspendAll', processed, total, done: true, cancelled: cancelToken.cancelled });
+}
+
+// Unsuspend all tabs in a specific window
+async function unsuspendAllTabsInWindow(windowId) {
+  const tabs = await chrome.tabs.query({ windowId: windowId });
+  for (const tab of tabs) {
+    if (isSuspendedTab(tab)) {
+      const original = parseOriginalUrlFromSuspended(tab.url);
+      if (original) {
+        markTabUnsuspending(tab.id);
+        // Update timestamp immediately to prevent re-suspension
+        seenTimestamps[tab.id] = Date.now();
+        await chrome.tabs.update(tab.id, { url: original });
+      }
+    }
+  }
+  saveSeenTimestamps();
+}
+
+// Suspend selected tabs (force suspend, ignore whitelist but respect internal URLs)
+async function suspendSelectedTabs(tabIds) {
+  const settings = await getSettings();
+
+  // Pre-fetch all tabs and filter valid ones
+  const targets = [];
+  for (const tabId of tabIds) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (!isInternalUrl(tab.url)) {
+        targets.push(tab);
+      }
+    } catch (error) {
+      console.warn(`Failed to get tab ${tabId}:`, error);
+    }
+  }
+
+  // Process in concurrent batches
+  const concurrency = settings.suspendBatchConcurrency || 5;
+  for (let i = 0; i < targets.length; i += concurrency) {
+    const batch = targets.slice(i, i + concurrency);
+    await Promise.allSettled(batch.map(tab => suspendTab(tab, settings)));
+  }
+}
+
+// Unsuspend selected tabs
+async function unsuspendSelectedTabs(tabIds) {
+  for (const tabId of tabIds) {
+    try {
+      await unsuspendTabById(tabId);
+    } catch (error) {
+      console.warn(`Failed to unsuspend tab ${tabId}:`, error);
+    }
+  }
+}
+
+// Toggle suspend/unsuspend for a single tab
+async function toggleTabSuspension(tab) {
+  if (isSuspendedTab(tab)) {
+    // Unsuspend the tab
+    return await unsuspendTabById(tab.id);
+  } else {
+    // Suspend the tab
+    const settings = await getSettings();
+    if (tab && tab.url && !isInternalUrl(tab.url)) {
+      await suspendTab(tab, settings);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Helper to save seen timestamps (debounced via alarm interval)
+let seenSaveTimer = null;
+let seenSaveDirty = false;
+const SEEN_SAVE_DEBOUNCE_MS = 2000;
+
+function saveSeenTimestamps() {
+  // Debounce session storage writes to reduce IO pressure
+  seenSaveDirty = true;
+  if (seenSaveTimer) return;
+  seenSaveTimer = setTimeout(() => {
+    if (seenSaveDirty) {
+      chrome.storage.session.set({ utsSeen: seenTimestamps });
+      seenSaveDirty = false;
+    }
+    seenSaveTimer = null;
+  }, SEEN_SAVE_DEBOUNCE_MS);
+}
+
+function flushSeenTimestampsNow() {
+  // Force flush pending seen timestamps write
+  if (seenSaveTimer) {
+    clearTimeout(seenSaveTimer);
+    seenSaveTimer = null;
+  }
+  if (seenSaveDirty) {
+    chrome.storage.session.set({ utsSeen: seenTimestamps });
+    seenSaveDirty = false;
+  }
+}
+
+// Throttle for re-discard routine to avoid excessive work on rapid events
+let reDiscardScheduled = false;
+let reDiscardRunning = false;
+function scheduleReDiscard(tabId = null, delayMs = 500) {
+  if (typeof tabId === 'number') {
+    pendingReDiscardTabIds.add(tabId);
+  }
+
+  if (reDiscardScheduled) return;
+  reDiscardScheduled = true;
+  setTimeout(async () => {
+    reDiscardScheduled = false;
+
+    if (reDiscardRunning) {
+      if (pendingReDiscardTabIds.size > 0) {
+        scheduleReDiscard(null, 250);
+      }
+      return;
+    }
+
+    reDiscardRunning = true;
+    try {
+      await processQueuedReDiscardTabs();
+    } catch (e) {
+      console.warn('Scheduled re-discard failed', e);
+    } finally {
+      reDiscardRunning = false;
+      if (pendingReDiscardTabIds.size > 0) {
+        scheduleReDiscard(null, 500);
+      }
+    }
+  }, delayMs);
+}
+
+// Handle keyboard shortcuts from commands API
+chrome.commands.onCommand.addListener(async (command) => {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) return;
+    const settings = await getSettingsCached();
+
+    switch (command) {
+      case '01-toggle-suspend':
+        await toggleTabSuspension(tab);
+        break;
+      case '02-toggle-pause':
+        // Pausiert die Suspension für diesen Tab, indem er der temporären Whitelist hinzugefügt wird
+        if (tempWhitelist.has(tab.url)) {
+          tempWhitelist.delete(tab.url);
+        } else {
+          tempWhitelist.add(tab.url);
+        }
+        await persistTempWhitelist();
+        await updateAllVisibleIcons(); // Wichtig für das visuelle Feedback (Ausgrauen)
+        break;
+      case '03-suspend-selected':
+        const selectedTabsToSuspend = await chrome.tabs.query({ highlighted: true, currentWindow: true });
+        for (const t of selectedTabsToSuspend) {
+          if (!isSuspendedTab(t) && !isInternalUrl(t.url)) {
+            await suspendTab(t, settings);
+          }
+        }
+        break;
+      case '04-unsuspend-selected':
+        const selectedTabsToUnsuspend = await chrome.tabs.query({ highlighted: true, currentWindow: true });
+        for (const t of selectedTabsToUnsuspend) {
+          if (isSuspendedTab(t)) {
+            await unsuspendTabById(t.id);
+          }
+        }
+        break;
+      case '05-suspend-others-window':
+        await suspendOthersInWindow(tab.id, false);
+        break;
+      case '06-force-suspend-others-window':
+        await suspendOthersInWindow(tab.id, true);
+        break;
+      case '07-unsuspend-all-window':
+        await unsuspendAllTabsInWindow(tab.windowId);
+        break;
+      case '08-suspend-all-all-windows':
+        await suspendOthersInAllWindows(tab.id, false, false);
+        break;
+      case '09-force-suspend-all-all-windows':
+        await suspendOthersInAllWindows(tab.id, false, true);
+        break;
+      case '10-unsuspend-all-all-windows':
+        await unsuspendAllTabs(false);
+        break;
+      case '11-go-to-session-manager':
+        chrome.runtime.openOptionsPage(() => {
+          // Optional: Hänge einen Hash an die URL an, um direkt zum Session Manager zu springen, 
+          // falls deine options.js dies unterstützt.
+        });
+        break;
+    }
+  } catch (error) {
+    console.error(`[ZeroRAM Shortcuts] Fehler bei Ausführung von ${command}:`, error);
+  }
+});
+
+// ==== Test-only export ====
+// Guarded so it is inert at runtime: Chrome loads this as an ES-module service
+// worker where `module` is undefined, so the block is skipped. Under Jest it is
+// required as CommonJS, exposing the internals for unit testing.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    // constants
+    DEFAULT_SETTINGS,
+    STORAGE_KEY,
+    TEMP_KEY,
+    LAST_ACTIVE_TAB_KEY,
+    LAST_FOCUSED_WINDOW_KEY,
+    SUSPENDED_PREFIX,
+    ALARM_PERIOD_MINUTES,
+    DISCARD_READY_TIMEOUT_MS,
+    FAVICON_CONFIRM_INTERVAL_MS,
+    FAVICON_CONFIRM_MAX_ATTEMPTS,
+    FAVICON_CAPTURE_DELAY_MS,
+    EXTENSION_DEFAULT_FAVICON_URLS,
+    // pure helpers
+    isInternalUrl,
+    isTabGoneError,
+    logUnexpectedTabError,
+    compileWhitelist,
+    ensureCompiledWhitelist,
+    isHostnameWhitelisted,
+    isWhitelisted,
+    isSuspendedTab,
+    getExtensionIconPaths,
+    stripFaviconUrlSuffix,
+    isExtensionDefaultFaviconUrl,
+    hasUsableSuspendedFavicon,
+    needsSuspendedFaviconFix,
+    parseOriginalUrlFromSuspended,
+    markTabSeen,
+    markTabUnsuspending,
+    isTabUnsuspending,
+    // lifecycle
+    initPromise,
+    // settings / storage
+    getSettings,
+    getSettingsCached,
+    saveSettings,
+    setTempWhitelistFromStorageValue,
+    persistTempWhitelist,
+    saveLastActiveTab,
+    loadLastActiveTab,
+    setLastActiveTabInWindow,
+    removeLastActiveTabInWindow,
+    loadLastActiveTabPerWindow,
+    markWindowActiveTabSeen,
+    saveSeenTimestamps,
+    flushSeenTimestampsNow,
+    // suspend / discard lifecycle
+    revalidateTabForSuspend,
+    suspendTab,
+    suspendWithPlaceholder,
+    beginSuspendedReadyWait,
+    waitForTabLoaded,
+    cancelPendingDiscardWait,
+    markSuspendedFaviconReady,
+    confirmSuspendedFaviconReady,
+    discardSuspendedTabWhenReady,
+    fixFaviconProcessor,
+    checkTabs,
+    scheduleCheckAlarm,
+    scheduleReDiscard,
+    processQueuedReDiscardTabs,
+    // bulk operations
+    postBulkProgress,
+    newCancelToken,
+    cancelBulkNow,
+    unsuspendTabById,
+    unsuspendTabWithUrl,
+    suspendOthersInWindow,
+    suspendOthersInAllWindows,
+    unsuspendAllTabs,
+    unsuspendAllTabsInWindow,
+    suspendSelectedTabs,
+    unsuspendSelectedTabs,
+    toggleTabSuspension,
+    // live state accessors for assertions
+    __getInternals: () => ({
+      initDone,
+      tempWhitelist,
+      seenTimestamps,
+      unsuspendingTabs,
+      pendingDiscardTabs,
+      suspendedFaviconReadyTabs,
+      lastActiveTabId,
+      lastActiveTabPerWindow,
+      lastFocusedWindowId,
+      fixFaviconTabs,
+      fixFaviconRetryCounts,
+      pendingReDiscardTabIds,
+      reDiscardRetryCounts,
+      cachedSettings,
+      popupPorts,
+      bulkCancelToken,
+      running,
+    }),
+    __setState: (patch = {}) => {
+      if ('lastActiveTabId' in patch) lastActiveTabId = patch.lastActiveTabId;
+      if ('lastFocusedWindowId' in patch) lastFocusedWindowId = patch.lastFocusedWindowId;
+      if ('running' in patch) running = patch.running;
+      if ('cachedSettings' in patch) cachedSettings = patch.cachedSettings;
+      if ('cachedAtMs' in patch) cachedAtMs = patch.cachedAtMs;
+    },
+  };
+}
