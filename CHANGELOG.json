@@ -1,5 +1,16 @@
 [
 {
+  "sha": "d4556210d892f89a415d77cd1fcdc21226152dcb",
+  "html_url": "https://github.com/yhchiu/ZeroRAM-Suspender/commit/d4556210d892f89a415d77cd1fcdc21226152dcb",
+  "commit": {
+    "message": "fix(saved-sessions): capture and re-open suspended/discarded tabs",
+    "author": {
+      "name": "Arthur Chiu",
+      "date": "2026-07-11T19:00:00+08:00"
+    }
+  }
+},
+{
   "sha": "b3c5c547d5cd43655fef729aca7a83136d345925",
   "html_url": "https://github.com/yhchiu/ZeroRAM-Suspender/commit/b3c5c547d5cd43655fef729aca7a83136d345925",
   "commit": {
