@@ -1,0 +1,89 @@
+From: ZeroRAM Suspender optimization
+Subject: [PATCH] Skip favicon-ready-wait on user suspend + skip re-render of already-discarded tabs
+
+Beide Verbesserungen lassen sich sauber in einem einzigen Commit
+abbilden, da sie unabhängig voneinander sind und sich nur an
+`chrome.tabs.discard()` kreuzen.
+
+--- a/background.js
++++ b/background.js
+@@ -636,7 +636,7 @@
+ }
+ 
+-async function suspendTab(tab, settings, revalidate = false, force = false) {
++async function suspendTab(tab, settings, revalidate = false, force = false, skipReadyWait = false) {
+   if (revalidate) {
+     const fresh = await revalidateTabForSuspend(tab.id, settings, force);
+     if (!fresh) return;
+@@ -644,6 +644,13 @@ async function suspendTab(tab, settings, revalidate = false, force = false) {
+ 
+   const shouldDiscard = settings.useNativeDiscard && !tab.active;
++  // Schnellpfad: User hat explizit suspendiert → nicht auf Favicon warten.
++  // Spart bis zu DISCARD_READY_TIMEOUT_MS (=10s) Renderer-Last pro Klick.
++  if (shouldDiscard && skipReadyWait) {
++    try {
++      await chrome.tabs.discard(tab.id);
++    } catch (_) {}
++    return;
++  }
++
+   if (shouldDiscard) {
+     beginSuspendedReadyWait(tab.id);
+   }
+@@ -969,7 +976,11 @@ async function checkTabs() {
+     if (isTabUnsuspending(tab.id)) {
+       continue;
+     }
+ 
+     // NEU: Wenn die andere Extension den Tab entladen hat, zwinge ZeroRAM zur sofortigen Übernahme
+     if (tab.discarded) {
+-      suspendTargets.push(tab);
+-      continue; // Überspringt die restliche Zeitberechnung für diesen Tab
++      // Wenn der Tab bereits unseren suspended-Placeholder hält, nichts tun —
++      // sonst Renderer-Wake-Up + Reload + Re-Discard pro Alarm-Tick.
++      if (tab.url && tab.url.startsWith(SUSPENDED_PREFIX)) continue;
++      suspendTargets.push(tab);
++      continue; // Überspringt die restliche Zeitberechnung für diesen Tab
+     }
+@@ -1432,7 +1444,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+       if (msg.command === 'suspendTab') {
+         const tab = await chrome.tabs.get(msg.tabId);
+         const settings = await getSettings();
+-        await suspendTab(tab, settings);
++        await suspendTab(tab, settings, false, false, true); // skipReadyWait
+         respond({ done: true });
+@@ -1709,7 +1721,7 @@ async function suspendOthersInAllWindows(tabId, withProgress = false, force
+   const concurrency = settings.suspendBatchConcurrency || 5;
+   for (let i = 0; i < targets.length; i += concurrency) {
+     const batch = targets.slice(i, i + concurrency);
+-    await Promise.allSettled(batch.map(tab => suspendTab(tab, settings, true, force)));
++    await Promise.allSettled(batch.map(tab => suspendTab(tab, settings, true, force, true)));
+   }
+ }
+@@ -1837,7 +1849,7 @@ async function suspendSelectedTabs(tabIds) {
+   const concurrency = settings.suspendBatchConcurrency || 5;
+   for (let i = 0; i < targets.length; i += concurrency) {
+     const batch = targets.slice(i, i + concurrency);
+-    await Promise.allSettled(batch.map(tab => suspendTab(tab, settings)));
++    await Promise.allSettled(batch.map(tab => suspendTab(tab, settings, false, false, true)));
+   }
+ }
+@@ -1861,7 +1873,7 @@ async function toggleTabSuspension(tab) {
+   } else {
+     // Suspend the tab
+     const settings = await getSettings();
+     if (tab && tab.url && !isInternalUrl(tab.url)) {
+-      await suspendTab(tab, settings);
++      await suspendTab(tab, settings, false, false, true); // skipReadyWait
+       return true;
+     }
+@@ -1957,7 +1969,7 @@
+       case '03-suspend-selected':
+         const selectedTabsToSuspend = await chrome.tabs.query({ highlighted: true, currentWindow: true });
+         for (const t of selectedTabsToSuspend) {
+           if (!isSuspendedTab(t) && !isInternalUrl(t.url)) {
+-            await suspendTab(t, settings);
++            await suspendTab(t, settings, false, false, true); // skipReadyWait
+           }
+         }
+         break;
