@@ -73,6 +73,27 @@ describe('migration flows', () => {
     );
     jest.useRealTimers();
   });
+
+  test('migrateSelectedTabs deletes the suspended placeholder URL from browser history', async () => {
+    jest.useFakeTimers();
+    const url = `chrome-extension://klbibkeccnjlkjkiokjodocebajanakg/suspended.html#ttl=${encodeURIComponent('Old')}&uri=${encodeURIComponent('https://old.com')}`;
+    const { options, chrome } = loadOptions({ tabs: [{ id: 7, url, windowId: 1 }] });
+    chrome.i18n.getMessage.mockImplementation((k) => k);
+
+    await options.scanForExtensionTabs('marvellous');
+    await Promise.resolve();
+    const promise = options.migrateSelectedTabs('marvellous');
+    await jest.runAllTimersAsync();
+    await promise;
+
+    expect(chrome.history.deleteUrl).toHaveBeenCalledTimes(1);
+    const deletedUrl = chrome.history.deleteUrl.mock.calls[0][0].url;
+    const updateUrl = chrome.tabs.update.mock.calls.find((call) => call[0] === 7)[1].url;
+    expect(deletedUrl).toBe(updateUrl);
+    expect(deletedUrl).toContain('suspended.html?uri=');
+    expect(deletedUrl).toContain('old.com');
+    jest.useRealTimers();
+  });
 });
 
 describe('session flows', () => {

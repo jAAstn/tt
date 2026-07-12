@@ -11,7 +11,8 @@
     "storage",
     "activeTab",
     "alarms",
-    "favicon"
+    "favicon",
+    "history"
   ],
   "background": {
     "service_worker": "background.js",

@@ -1276,6 +1276,14 @@ async function migrateSelectedTabs(extensionKey) {
         
         // Update the tab to use ZeroRAM Suspender format
         await chrome.tabs.update(tabId, { url: suspendedUrl });
+        // Remove the placeholder URL from browser history. Navigating to our
+        // chrome-extension:// suspended page still creates a history entry;
+        // clean it up so the migration does not pollute history.
+        try {
+          await chrome.history.deleteUrl({ url: suspendedUrl });
+        } catch (_) {
+          // Best-effort cleanup; do not fail migration over a history entry.
+        }
         successCount++;
       } catch (error) {
         console.error(`[ZeroRAM Suspender] Error migrating ${config.name} tab:`, error);
@@ -2257,6 +2265,7 @@ async function captureSavedSession(scope) {
         title: effectiveTitle,
         pinned: Boolean(t.pinned),
         wasSuspended,
+        favicon: t.favIconUrl || '',
       });
     }
     if (savedTabs.length === 0) continue;
@@ -2388,42 +2397,70 @@ function buildSavedSessionItem(session) {
   const winList = document.createElement('div');
   winList.className = 'saved-session-window-list';
   (session.windows || []).forEach((w, idx) => {
-    const row = document.createElement('div');
-    row.className = 'saved-session-window-row';
+    const winSection = document.createElement('div');
+    winSection.className = 'saved-session-window-section';
+    winSection.dataset.windowIndex = String(idx);
 
+    const header = document.createElement('div');
+    header.className = 'saved-session-window-header';
+    header.dataset.action = 'toggleWindow';
+    header.dataset.windowIndex = String(idx);
+
+    const headerLeft = document.createElement('div');
+    headerLeft.className = 'saved-session-window-header-left';
+    const chevron = document.createElement('span');
+    chevron.className = 'saved-session-window-chevron';
+    chevron.textContent = '\u25B6';
+    const wLabel = (getMessage('window') || 'Window');
     const label = document.createElement('span');
     label.className = 'saved-session-window-label';
-    const wLabel = (getMessage('window') || 'Window');
     label.textContent = `${wLabel} ${idx + 1} (${(w.tabs || []).length})`;
-    row.appendChild(label);
+    headerLeft.append(chevron, label);
 
     const openBtn = document.createElement('button');
-    openBtn.className = 'btn btn-info saved-session-action-btn';
+    openBtn.className = 'btn btn-info saved-session-action-btn saved-session-open-window-btn';
     openBtn.dataset.action = 'openWindow';
     openBtn.dataset.windowIndex = String(idx);
     openBtn.textContent = getMessage('openWindow') || 'Open Window';
-    row.appendChild(openBtn);
+    openBtn.title = getMessage('openWindow') || 'Open Window';
 
-    // Per-window single-tab opener. Empty placeholder option means “no tab
-    // selected” so the user can re-pick the same tab after opening it.
-    const select = document.createElement('select');
-    select.className = 'saved-session-tab-select';
-    select.dataset.windowIndex = String(idx);
-    select.style.marginLeft = '8px';
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = `\u2014 ${(getMessage('openTab') || 'Open Tab')} \u2014`;
-    select.appendChild(placeholder);
+    header.appendChild(headerLeft);
+    header.appendChild(openBtn);
+
+    const tabGrid = document.createElement('div');
+    tabGrid.className = 'saved-session-tab-grid';
     (w.tabs || []).forEach((t, tIdx) => {
-      const opt = document.createElement('option');
-      opt.value = String(tIdx);
-      const labelText = (t.title || t.url || '').slice(0, 80);
-      opt.textContent = `${tIdx + 1}. ${labelText}`;
-      opt.title = t.url || '';
-      select.appendChild(opt);
+      const tabCard = document.createElement('div');
+      tabCard.className = 'saved-session-tab-card';
+      tabCard.dataset.action = 'openTab';
+      tabCard.dataset.windowIndex = String(idx);
+      tabCard.dataset.tabIndex = String(tIdx);
+      tabCard.title = t.url || '';
+      tabCard.setAttribute('role', 'button');
+      tabCard.setAttribute('tabindex', '0');
+      tabCard.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          tabCard.click();
+        }
+      });
+
+      const favicon = document.createElement('img');
+      favicon.className = 'saved-session-tab-favicon';
+      favicon.src = t.favicon || 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJjdXJyZW50Q29sb3IiIHN0cm9rZS13aWR0aD0iMiI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iOSIvPjxwYXRoIGQ9Ik0zIDVoMTZNMyAxMmgxNk0zIDE5aDE2Ii8+PC9zdmc+';
+      favicon.alt = '';
+      favicon.addEventListener('error', () => { favicon.src = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHRleHQgeD0iNTAlIiB5PSI1NSUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTYiPjwhW0NEQVRBW+KPsjxdXT48L3RleHQ+PC9zdmc+'; }, { once: true });
+
+      const tabTitle = document.createElement('span');
+      tabTitle.className = 'saved-session-tab-card-title';
+      tabTitle.textContent = t.title || t.url || '';
+
+      tabCard.append(favicon, tabTitle);
+      tabGrid.appendChild(tabCard);
     });
-    row.appendChild(select);
-    winList.appendChild(row);
+
+    winSection.append(header, tabGrid);
+    winList.appendChild(winSection);
   });
 
   meta.append(nameRow, stats, winList);
@@ -2444,6 +2481,8 @@ function buildSavedSessionItem(session) {
   return item;
 }
 
+
+
 async function handleSavedSessionListClick(event) {
   const action = event.target.closest('[data-action]');
   if (!action) return;
@@ -2456,34 +2495,38 @@ async function handleSavedSessionListClick(event) {
 
   if (kind === 'openAll') {
     await openSavedSession(id, { scope: 'all' });
+    return;
   } else if (kind === 'openWindow') {
     const idx = parseInt(action.dataset.windowIndex, 10);
     await openSavedSession(id, { scope: 'window', windowIndex: idx });
+    return;
+  } else if (kind === 'openTab') {
+    const wIdx = parseInt(action.dataset.windowIndex, 10);
+    const tIdx = parseInt(action.dataset.tabIndex, 10);
+    await openSavedSession(id, { scope: 'tab', windowIndex: wIdx, tabIndex: tIdx });
+    return;
   } else if (kind === 'rename') {
     await promptRenameSavedSession(id);
+    return;
   } else if (kind === 'delete') {
     const confirmed = window.confirm(
-      (getMessage('confirmDeleteSession') || 'Delete saved session "%s"? This cannot be undone.')
+      (getMessage('confirmDeleteSession') || 'Delete saved session \"%s\"? This cannot be undone.')
         .replace('%s', item.querySelector('.saved-session-name')?.textContent || '')
     );
     if (confirmed) {
       await deleteSavedSession(id);
     }
+    return;
+  } else if (kind === 'toggleWindow') {
+    const section = action.closest('.saved-session-window-section');
+    if (section) {
+      section.classList.toggle('expanded');
+    }
+    return;
   }
 }
 
-async function handleSavedSessionListChange(event) {
-  const select = event.target;
-  if (!select || !select.classList.contains('saved-session-tab-select')) return;
-  if (select.value === '') return;
-  const item = select.closest('.saved-session-item');
-  if (!item) return;
-  const id = item.dataset.sessionId;
-  const wIdx = parseInt(select.dataset.windowIndex, 10);
-  const tIdx = parseInt(select.value, 10);
-  select.value = '';
-  await openSavedSession(id, { scope: 'tab', windowIndex: wIdx, tabIndex: tIdx });
-}
+
 
 async function promptRenameSavedSession(id) {
   const sessions = await loadSavedSessions();
@@ -2589,6 +2632,7 @@ function parsedSessionToSavedWindows(parsed) {
           : (suspendedInfo ? (suspendedInfo.title || '') : ''),
         pinned: Boolean(t.pinned),
         wasSuspended,
+        favicon: typeof t.favicon === 'string' ? t.favicon : '',
       });
     }
     if (tabs.length) out.push({ tabs });
@@ -2736,8 +2780,7 @@ function initSavedSessions() {
   if (saveAllBtn) saveAllBtn.addEventListener('click', () => saveSavedSession('allWindows'));
   if (listEl) {
     listEl.addEventListener('click', handleSavedSessionListClick);
-    listEl.addEventListener('change', handleSavedSessionListChange);
-  }
+      }
 
   // Always re-render on entry so deletions / renames done in another tab are
   // visible immediately. Cheap: at most MAX_SAVED_SESSIONS rows.
@@ -3866,8 +3909,7 @@ if (typeof module !== 'undefined' && module.exports) {
     collectOpenWindowPayload,
     initSavedSessions,
     handleSavedSessionListClick,
-    handleSavedSessionListChange,
-    saveSavedSessions_promptName,
+        saveSavedSessions_promptName,
     parsedSessionToSavedWindows,
     importSessionToSavedSessions,
     // settings flows

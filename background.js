@@ -874,8 +874,18 @@ async function suspendWithPlaceholder(tab) {
   const suspendedUrl = SUSPENDED_PREFIX +
     `?uri=${encodeURIComponent(tab.url)}&ttl=${encodeURIComponent(tab.title || '')}` +
     (favIconUrl ? `&favicon=${encodeURIComponent(favIconUrl)}` : '');
-    
+
   await chrome.tabs.update(tab.id, { url: suspendedUrl });
+  // Remove the placeholder URL from browser history. Navigating to a
+  // chrome-extension:// page via chrome.tabs.update still creates a history
+  // entry; without cleanup the history gets flooded with one entry per
+  // suspended tab.
+  try {
+    await chrome.history.deleteUrl({ url: suspendedUrl });
+  } catch (_) {
+    // Best-effort: history API may be unavailable or the entry may already
+    // have been removed. The tab is already suspended, so never throw here.
+  }
 }
 
 // --- NEU: Berechnet die individuelle Zeit für jeden Tab ---
@@ -1283,11 +1293,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete') {
     seenTimestamps[tabId] = Date.now();
     saveSeenTimestamps();
-    
+
     if (unsuspendingTabs.has(tabId)) {
       unsuspendingTabs.delete(tabId);
     }
-    
+
     if (fixFaviconTabs.has(tabId)) {
       fixFaviconTabs.delete(tabId);
     }
@@ -1296,7 +1306,18 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       suspendedFaviconReadyTabs.add(tabId);
       fixFaviconRetryCounts.delete(tabId);
     }
-    
+
+    // History cleanup for our suspended placeholder: the entry may not exist
+    // when the immediate deleteUrl runs, so retry once the page has fully
+    // loaded and Chrome has committed the navigation.
+    if (suspended && tab.url) {
+      try {
+        await chrome.history.deleteUrl({ url: tab.url });
+      } catch (_) {
+        // Best-effort: ignore if history API is unavailable or entry is gone.
+      }
+    }
+
     const pendingInfo = pendingDiscardTabs.get(tabId);
     if (pendingInfo && suspended) {
       pendingInfo.pageComplete = true;

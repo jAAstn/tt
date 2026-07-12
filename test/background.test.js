@@ -192,6 +192,17 @@ describe('pure helpers', () => {
     expect(updated.url).toContain(encodeURIComponent('https://x.com/a'));
     expect(updated.url).toContain('favicon=');
   });
+
+  test('suspendWithPlaceholder deletes the placeholder URL from browser history', async () => {
+    const { bg, chrome } = loadBackground({
+      tabs: [{ id: 1, url: 'https://x.com/a', title: 'Title', windowId: 1 }],
+    });
+    await bg.suspendWithPlaceholder(chrome._getTab(1));
+    expect(chrome.history.deleteUrl).toHaveBeenCalledTimes(1);
+    const deletedUrl = chrome.history.deleteUrl.mock.calls[0][0].url;
+    expect(deletedUrl).toContain('suspended.html?uri=');
+    expect(deletedUrl).toContain(encodeURIComponent('https://x.com/a'));
+  });
 });
 
 describe('settings & storage', () => {

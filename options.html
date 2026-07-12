@@ -1261,6 +1261,7 @@ position: fixed;
               background: var(--bg-elevated);
               border: 1px solid var(--border);
               border-radius: var(--radius-md);
+              align-items: start;
             }
             .saved-session-meta { min-width: 0; }
             .saved-session-name-row {
@@ -1281,36 +1282,105 @@ position: fixed;
             .saved-session-stats {
               font-size: 12px;
               color: var(--text-muted);
-              margin-bottom: 8px;
+              margin-bottom: 10px;
             }
             .saved-session-window-list {
               display: flex;
               flex-direction: column;
-              gap: 6px;
+              gap: 8px;
             }
-            .saved-session-window-row {
+            .saved-session-window-section {
+              background: var(--surface);
+              border: 1px solid var(--border);
+              border-radius: var(--radius-md);
+              overflow: hidden;
+            }
+            .saved-session-window-header {
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 8px;
+              padding: 8px 10px;
+              cursor: pointer;
+              user-select: none;
+              transition: background-color 0.15s ease;
+            }
+            .saved-session-window-header:hover {
+              background: var(--surface-hover);
+            }
+            .saved-session-window-header-left {
               display: flex;
               align-items: center;
               gap: 8px;
-              font-size: 13px;
-              padding: 6px 8px;
-              background: var(--surface);
-              border-radius: var(--radius-sm);
+              flex: 1;
+              min-width: 0;
+            }
+            .saved-session-window-chevron {
+              font-size: 12px;
+              color: var(--text-muted);
+              transition: transform 0.2s ease;
+              flex-shrink: 0;
+            }
+            .saved-session-window-section.expanded .saved-session-window-chevron {
+              transform: rotate(90deg);
             }
             .saved-session-window-label {
               font-weight: 500;
               color: var(--text-body);
-              flex: 1;
-              min-width: 0;
+              font-size: 13px;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
             }
-            .saved-session-tab-select {
-              padding: 4px 8px;
+            .saved-session-open-window-btn {
+              padding: 4px 10px;
+              font-size: 12px;
+              flex-shrink: 0;
+            }
+            .saved-session-tab-grid {
+              display: none;
+              grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+              gap: 8px;
+              padding: 10px;
+              background: var(--bg-elevated);
+              border-top: 1px solid var(--border);
+            }
+            .saved-session-window-section.expanded .saved-session-tab-grid {
+              display: grid;
+            }
+            .saved-session-tab-card {
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              padding: 8px;
+              background: var(--surface);
               border: 1px solid var(--border);
               border-radius: var(--radius-sm);
-              background: var(--bg-elevated);
-              color: var(--text-body);
+              cursor: pointer;
+              transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+              min-width: 0;
+            }
+            .saved-session-tab-card:hover {
+              background: var(--surface-hover);
+              border-color: var(--brand-strong);
+            }
+            .saved-session-tab-card:active {
+              transform: scale(0.98);
+            }
+            .saved-session-tab-favicon {
+              width: 18px;
+              height: 18px;
+              flex-shrink: 0;
+              object-fit: contain;
+            }
+            .saved-session-tab-card-title {
               font-size: 12px;
-              max-width: 240px;
+              color: var(--text-body);
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+              flex: 1;
+              min-width: 0;
             }
             .saved-session-actions {
               display: flex;

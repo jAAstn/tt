@@ -326,6 +326,10 @@ function createChromeMock(initialState = {}) {
       onCommand: makeEvent(),
     },
 
+    history: {
+      deleteUrl: jest.fn(() => Promise.resolve()),
+    },
+
     i18n: {
       getMessage: jest.fn((key, substitutions) => {
         const entry = EN_MESSAGES[key];
