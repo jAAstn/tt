@@ -1,0 +1,101 @@
+{
+  "name": "ZeroRAM",
+  "description": "Tab Suspender",
+  "version": "3",
+  "manifest_version": 3,
+  "minimum_chrome_version": "88",
+  "default_locale": "en",
+  "permissions": [
+    "tabs",
+    "storage",
+    "activeTab",
+    "alarms",
+    "favicon",
+    "history"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "ZeroRAM Suspender",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+"commands": {
+    "_execute_action": {
+      "description": "Activate the extension ( show popup )"
+    },
+"01-toggle-suspend": {
+      "description": "Suspend/Unsuspend active tab"
+    },
+    "02-toggle-pause": {
+      "description": "Pause/Unpause suspension of active tab",
+	  "suggested_key": {
+        "default": "Ctrl+A"
+      }
+    },
+    "03-suspend-selected": {
+      "description": "Suspend selected tabs",
+	  "suggested_key": {
+        "default": "Ctrl+Q"
+      }
+    },
+    "04-unsuspend-selected": {
+      "description": "Unsuspend selected tabs"
+    },
+    "05-suspend-others-window": {
+      "description": "Suspend all other tabs in active window",
+	  "suggested_key": {
+        "default": "Alt+S"
+      }
+    },
+    "06-force-suspend-others-window": {
+      "description": "Force suspend all other tabs in active window",
+	  "suggested_key": {
+        "default": "Alt+D"
+      }
+    },
+    "07-unsuspend-all-window": {
+      "description": "Unsuspend all tabs in active window"
+    },
+    "08-suspend-all-all-windows": {
+      "description": "Suspend all tabs in all windows"
+    },
+    "09-force-suspend-all-all-windows": {
+      "description": "Force suspend all tabs in all windows"
+    },
+    "10-unsuspend-all-all-windows": {
+      "description": "Unsuspend all tabs in all windows"
+    },
+    "11-go-to-session-manager": {
+      "description": "Go to session manager"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["suspended.html", "suspended.js", "i18n.js", "style.css", "_favicon/*"],
+      "matches": ["<all_urls>"],
+      "extension_ids": ["*"]
+    }
+  ]
+} 
